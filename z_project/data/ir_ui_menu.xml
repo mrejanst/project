@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data>
+
+        <!-- [Override] -->
+        <menuitem id="project.menu_project_management_my_tasks" name="My Tasks" action="project.action_server_view_my_task" sequence="1" groups="base.group_public"/>
+        <!-- [Added] -->
+        <menuitem id="z_menu_correction_timesheet" name="Correction Timesheet" parent="project.menu_main_pm" action="z_correction_timesheet_action" sequence="2"/>
+        <menuitem id="z_menu_project_config_added" name="Added" parent="project.menu_project_config" sequence="55"/>
+        <menuitem id="z_menu_project_config_area_regional" name="Area Regional" parent="z_menu_project_config_added" action="z_area_regional_action" sequence="1"/>
+        <menuitem id="z_menu_project_config_technology_used" name="Technology Used" parent="z_menu_project_config_added" action="z_technology_used_action" sequence="2"/>
+        <menuitem id="z_menu_project_config_severity_master" name="Severity Master" parent="z_menu_project_config_added" action="z_severity_master_action" sequence="3"/>
+        <menuitem id="z_menu_project_config_task_master" name="Task Master" parent="z_menu_project_config_added" action="z_task_master_action" sequence="4"/>
+
+    </data>
+</odoo>

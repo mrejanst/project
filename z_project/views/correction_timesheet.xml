@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- [Correction Timesheet Form] -->
+        <record id="z_correction_timesheet_form" model="ir.ui.view">
+            <field name="name">correction.timesheet.form</field>
+            <field name="model">correction.timesheet</field>
+            <field name="arch" type="xml">
+                <form string="Correction Timesheet">
+                    <header>
+                        <button name="action_confirm" string="Confirm" type="object" class="oe_highlight"/>
+                        <button name="action_confirm" string="Approved" type="object" class="oe_highlight"/>
+                        <button name="action_cancel" string="Cancel" type="object" class="oe_highlight"/>
+                        <button name="action_reject" string="Reject" type="object" class="oe_highlight"/>
+                        <button name="action_set_to_draft" string="Set to Draft" type="object" class="oe_highlight"/>
+                        <field name="z_state" widget="statusbar" statusbar_visible="new,waiting_approval,approved"/>
+                    </header>
+                    <sheet>
+                        <div class="oe_title">
+                            <label for="z_name" string="Correction Timesheet"/>
+                            <h1><field name="z_name" force_save="1" readonly="1" placeholder="e.g. Correction Timesheet"/></h1>
+                        </div>
+                        <group>
+                            <group>
+                                <field name="z_project_id" force_save="1" readonly="1" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                                <field name="z_task_id" required="1" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                                <field name="z_task_name"/>
+                                <field name="z_head_assigned_ids" required="1" widget="many2many_tags" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                                <field name="z_member_assigned_ids" required="1" widget="many2many_tags" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                            </group>
+                            <group>
+                                <field name="z_planned_start_date" required="1"/>
+                                <field name="z_planned_end_date" required="1"/>
+                                <field name="z_correction_type" required="1"/>
+                            </group>
+                        </group>
+                        <notebook>
+                            <page string="Detail">
+                                <field name="z_line_ids">
+                                    <list editable="bottom">
+                                        <field name="z_correction_id" optional="hide" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                                        <field name="z_timesheet_id" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                                        <field name="z_ori_start_date"/>
+                                        <field name="z_ori_end_date"/>
+                                        <field name="z_current_start_date"/>
+                                        <field name="z_current_end_date"/>
+                                        <field name="z_employee_id"/>
+                                        <field name="z_name"/>
+                                        <field name="z_ori_timespent"/>
+                                        <field name="z_current_timespent"/>
+                                    </list>
+                                </field>
+                            </page>
+                        </notebook>
+                    </sheet>
+                    <chatter/>
+                </form>
+            </field>
+        </record>
+
+        <!-- [Correction Timesheet List] -->
+        <record id="z_correction_timesheet_list" model="ir.ui.view">
+            <field name="name">correction.timesheet.list</field>
+            <field name="model">correction.timesheet</field>
+            <field name="arch" type="xml">
+                <list string="Correction Timesheet">
+                    <field name="z_name"/>
+                    <field name="z_correction_type"/>
+                    <field name="z_project_id"/>
+                    <field name="z_task_id"/>
+                    <field name="z_task_name"/>
+                    <field name="z_head_assigned_ids" widget="many2many_tags"/>
+                    <field name="z_member_assigned_ids" widget="many2many_tags"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- [Correction Timesheet Action] -->
+        <record id="z_correction_timesheet_action" model="ir.actions.act_window">
+            <field name="name">Correction Timesheet</field>
+            <field name="res_model">correction.timesheet</field>
+            <field name="domain">[]</field>
+            <field name="context">{}</field>
+            <field name="view_mode">list,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">No projects found. Let's create one!</p>
+                <p>Create projects to organize your tasks. Define a different workflow for each project.</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

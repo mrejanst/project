@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- [Task Master Form] -->
+        <record id="z_task_master_form" model="ir.ui.view">
+            <field name="name">task.master.form</field>
+            <field name="model">task.master</field>
+            <field name="arch" type="xml">
+                <form string="Task Master">
+                    <sheet>
+                        <div class="oe_title">
+                            <label for="z_name" string="Tasks"/>
+                            <h1><field name="z_name" placeholder="e.g. Lamps"/></h1>
+                        </div>
+                        <group name="first" col="2">
+                            <field name="z_parent_id" class="oe_inline"/>
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- [Task Master List] -->
+        <record id="z_task_master_list" model="ir.ui.view">
+            <field name="name">task.master.list</field>
+            <field name="model">task.master</field>
+            <field name="arch" type="xml">
+                <list string="Task Master">
+                    <field name="z_complete_name"/>
+                    <field name="create_uid" string="Create By"/>
+                    <field name="create_date" string="Create Date"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- [Task Master Action] -->
+        <record id="z_task_master_action" model="ir.actions.act_window">
+            <field name="name">Task Master</field>
+            <field name="res_model">task.master</field>
+            <field name="domain">[]</field>
+            <field name="context">{}</field>
+            <field name="view_mode">list,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">No projects found. Let's create one!</p>
+                <p>Create projects to organize your tasks. Define a different workflow for each project.</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

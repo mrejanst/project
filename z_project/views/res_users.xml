@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+         <record id="z_res_users_form_inherit_sync_data" model="ir.ui.view">
+            <field name="name">Res Users Form Inherit Sync Data</field>
+            <field name="model">res.users</field>
+            <field name="inherit_id" ref="base.view_users_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//notebook" position="inside">
+                    <page string="Portal Access">
+                        <group>
+                            <field name="z_project_group_id" domain="[('category_id.name','=','Portal Projects')]" options="{'limit': 10, 'no_create': true, 'create': false, 'create_edit': false, 'no_open':true}"/>
+                        </group>
+                    </page>
+                </xpath>
+            </field>
+        </record>
+
+    </data>
+</odoo>

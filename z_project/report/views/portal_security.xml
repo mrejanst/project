@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <template id="z_project.portal_security">
+        <t t-call="z_project.portal_layout"><div class="o_portal_security_body w-md-75 w-lg-50 pb-5">
+            <t t-set="additional_title">Security</t>
+            <t t-set="no_breadcrumbs" t-value="1"/>
+            <div class="alert alert-danger" role="alert" t-if="get_error(errors)">
+                <t t-esc="errors"/>
+            </div>
+            <div class="d-flex gap-2 my-3">
+                <a href="/portal/" title="Go Back" class="btn btn-light px-2"><i class="oi oi-chevron-left"/></a>
+                <h3 class="my-0">Connection &amp; Security</h3>
+            </div>
+            <section name="portal_change_password">
+                <h4>Change Password</h4>
+                <t t-set="path">password</t>
+                <div class="alert alert-success" role="alert" t-if="success and success.get('password')">
+                    Password Updated!
+                </div>
+                <div class="alert alert-danger" role="alert" t-if="get_error(errors, 'password')">
+                    <t t-esc="errors['password']"/>
+                </div>
+                <form action="/portal/security" method="post" class="oe_reset_password_form">
+                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                    <input type="hidden" name="op" value="password"/>
+                    <div class="mb-3">
+                        <label for="current">Password:</label>
+                        <input type="password" t-attf-class="form-control form-control-sm {{ 'is-invalid' if get_error(errors, 'password.old') else '' }}"
+                               id="current" name="old"
+                               autocomplete="current-password" required="required"/>
+                        <div class="invalid-feedback">
+                            <t t-esc="get_error(errors, 'password.old')"/>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="new">New Password:</label>
+                        <input type="password" t-attf-class="form-control form-control-sm {{ 'is-invalid' if get_error(errors, 'password.new1') else '' }}"
+                               id="new" name="new1"
+                               autocomplete="new-password" required="required"/>
+                        <div class="invalid-feedback">
+                            <t t-esc="get_error(errors, 'password.new1')"/>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="new2">Verify New Password:</label>
+                        <input type="password" t-attf-class="form-control form-control-sm {{ 'is-invalid' if get_error(errors, 'password.new2') else '' }}"
+                               id="new2" name="new2"
+                               autocomplete="new-password" required="required"/>
+                        <div class="invalid-feedback">
+                            <t t-esc="get_error(errors, 'password.new2')"/>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-light">Change Password</button>
+                </form>
+            </section>
+            <section name="portal_revoke_all_devices_popup">
+            <h4>Revoke All Sessions</h4>
+                <t t-set="path"/>
+                    <button type="button" class="btn btn-light" id="portal_revoke_all_sessions_popup">
+                        Log out from all devices
+                    </button>
+            </section>
+        </div></t>
+    </template>
+
+</odoo>

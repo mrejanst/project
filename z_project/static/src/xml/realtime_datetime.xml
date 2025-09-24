@@ -1,0 +1,3 @@
+<t t-name="z_project.RealtimeDatetime" owl="1">
+    <span><t t-esc="props.readonly ? displayValue : displayValue"/></span>
+</t>

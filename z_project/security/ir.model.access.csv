@@ -1,0 +1,12 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+z_project.access_project_project_program_name,access_project_project_program_name,z_project.model_project_project_program_name,,1,1,1,1
+z_project.access_project_project_invoice_plan,access_project_project_invoice_plan,z_project.model_project_project_invoice_plan,,1,1,1,1
+z_project.access_area_regional,access_area_regional,z_project.model_area_regional,,1,1,1,1
+z_project.access_technology_used,access_technology_used,z_project.model_technology_used,,1,1,1,1
+z_project.access_severity_master,access_severity_master,z_project.model_severity_master,,1,1,1,1
+z_project.access_task_master,access_task_master,z_project.model_task_master,,1,1,1,1
+z_project.access_task_master,access_task_master,z_project.model_task_master,,1,1,1,1
+z_project.access_project_task_invoice_plan,access_project_task_invoice_plan,z_project.model_project_task_invoice_plan,,1,1,1,1
+z_project.access_correction_timesheet,access_correction_timesheet,z_project.model_correction_timesheet,,1,1,1,1
+z_project.access_correction_timesheet_line,access_correction_timesheet_line,z_project.model_correction_timesheet_line,,1,1,1,1
+z_project.access_account_analytic_line_request,access_account_analytic_line_request,z_project.model_account_analytic_line_request,,1,1,1,1

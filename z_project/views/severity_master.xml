@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- [Severity Master List] -->
+        <record id="z_severity_master_list" model="ir.ui.view">
+            <field name="name">severity.master.list</field>
+            <field name="model">severity.master</field>
+            <field name="arch" type="xml">
+                <list string="Severity Master" editable="top">
+                    <field name="z_name"/>
+                    <field name="create_uid" string="Create By"/>
+                    <field name="create_date" string="Create Date"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- [Severity Master Action] -->
+        <record id="z_severity_master_action" model="ir.actions.act_window">
+            <field name="name">Severity Master</field>
+            <field name="res_model">severity.master</field>
+            <field name="domain">[]</field>
+            <field name="context">{}</field>
+            <field name="view_mode">list</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">No projects found. Let's create one!</p>
+                <p>Create projects to organize your tasks. Define a different workflow for each project.</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

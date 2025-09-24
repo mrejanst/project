@@ -1,0 +1,3284 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="portal_task_page" name="Portal Tasks">
+        <t t-call="portal.portal_layout">
+            <!-- CDN Links -->
+            <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet"/>
+            <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.34/moment-timezone-with-data.min.js"></script>
+
+            <script>
+                $(document).ready(function() {
+                // Select2 initialization
+                $('.js-example-basic-single').select2({
+                placeholder: "Select an option",
+                allowClear: true
+                });
+                $('.js-example-basic-multiple').select2({
+                placeholder: "Select multiple options",
+                allowClear: true,
+                width: '100%'
+                });
+
+                // Auto-populate task name when project changes
+                $('select[name="project_id"]').change(function() {
+                var projectId = $(this).val();
+                if (projectId) {
+                var projectName = $(this).find('option:selected').text();
+                $('input[name="name"]').val(projectName);
+                }
+                });
+
+                // Dynamic Select2 for assignees with auto-hide
+                function setupDynamicSelect2(selector) {
+                const selectElement = $(selector);
+                if (!selectElement.length) {
+                return;
+                }
+                selectElement.select2({
+                placeholder: "Select an option",
+                allowClear: true,
+                width: '100%',
+                templateResult: function(data) {
+                try {
+                var selectedIds = selectElement.val() || [];
+                var dataId = (data &amp;&amp; typeof data.id !== 'undefined' &amp;&amp; data.id !== null) ?
+                data.id.toString() : null;
+                if (dataId &amp;&amp; selectedIds.indexOf(dataId) !== -1) {
+                return null;
+                }
+                return data &amp;&amp; (data.text || (data.element &amp;&amp; $(data.element).text())) || '';
+                } catch (err) {
+                return data &amp;&amp; (data.text || '') || '';
+                }
+                }
+                });
+                }
+
+                // Initialize for assignee selectors
+                setupDynamicSelect2('select[name="z_head_assignes_ids"]');
+                setupDynamicSelect2('select[name="z_member_assignes_ids"]');
+
+                // Group by handler with icon toggle
+                $(document).on('click', '[data-bs-target^="#collapse_"]', function(e) {
+                e.preventDefault();
+                var target = $(this).attr('data-bs-target');
+                var icon = $(this).find('i');
+                var collapse = $(target);
+
+                if (collapse.hasClass('show')) {
+                collapse.removeClass('show');
+                icon.removeClass('fa-caret-down').addClass('fa-caret-right');
+                } else {
+                collapse.addClass('show');
+                icon.removeClass('fa-caret-right').addClass('fa-caret-down');
+                }
+                });
+
+                // CSRF token
+                const csrf_token = $('input[name="csrf_token"]').val() || '';
+
+                // Timer UI variables
+                const $timerBadge = $('#runningTimerBadge');
+                let timerInterval = null;
+                let isPaused = false;
+
+                // FIXED: Format datetime untuk display WIB
+                function formatUtcToWib(utcStr) {
+                if (!utcStr) return '';
+
+                try {
+                const utcDate = new Date(utcStr);
+                // Add 7 hours for WIB (UTC+7)
+                const wibDate = new Date(utcDate.getTime() + (7 * 60 * 60 * 1000));
+
+                const month = String(wibDate.getMonth() + 1).padStart(2, '0');
+                const day = String(wibDate.getDate()).padStart(2, '0');
+                const year = wibDate.getFullYear();
+                const hours = String(wibDate.getHours()).padStart(2, '0');
+                const minutes = String(wibDate.getMinutes()).padStart(2, '0');
+                const seconds = String(wibDate.getSeconds()).padStart(2, '0');
+
+                return month + '/' + day + '/' + year + ' ' + hours + ':' + minutes + ':' + seconds;
+                } catch (e) {
+                console.error('Error converting datetime:', e);
+                return utcStr;
+                }
+                }
+
+                // FIXED: Format hours to hours and minutes
+                function formatHoursToHM(hours) {
+                if (!hours || hours === 0) return '0m';
+
+                const totalMinutes = Math.round(hours * 60);
+                const h = Math.floor(totalMinutes / 60);
+                const m = totalMinutes % 60;
+
+                if (h === 0) {
+                return m + 'm';
+                } else if (m === 0) {
+                return h + 'h';
+                } else {
+                return h + 'h ' + m + 'm';
+                }
+                }
+
+                // Apply timezone conversion to timesheet datetime elements
+                $('.timesheet-datetime').each(function() {
+                const utcStr = $(this).attr('data-utc');
+                if (utcStr) {
+                const wibStr = formatUtcToWib(utcStr);
+                $(this).text(wibStr);
+                }
+                });
+
+                // Apply hours formatting to time spent elements
+                $('.timesheet-hours').each(function() {
+                const hoursVal = parseFloat($(this).attr('data-hours'));
+                if (!isNaN(hoursVal)) {
+                const formattedTime = formatHoursToHM(hoursVal);
+                $(this).text(formattedTime);
+                }
+                });
+
+                // FIXED: Timer function yang BENAR-BENAR mulai dari 00:00:00
+                function startUiTimer(startIsoStr) {
+                if (!startIsoStr) return;
+
+                console.log('=== TIMER INITIALIZATION ===');
+                console.log('Raw timer start string from server:', startIsoStr);
+
+                let start;
+                try {
+                // CRITICAL FIX: Parse sebagai UTC dengan explicit Z suffix
+                let utcString = startIsoStr;
+                if (!utcString.includes('Z') &amp;&amp; !utcString.includes('+')) {
+                utcString = startIsoStr + 'Z';
+                }
+
+                start = new Date(utcString);
+
+                if (isNaN(start.getTime())) {
+                console.error('Invalid start time after parsing:', utcString);
+                return;
+                }
+
+                console.log('Parsed start time (UTC):', start.toISOString());
+                console.log('Current browser time (UTC):', new Date().toISOString());
+
+                // Check if time difference is reasonable (not 7+ hours off)
+                const now = new Date();
+                const diffHours = (now.getTime() - start.getTime()) / (1000 * 60 * 60);
+                console.log('Time difference in hours:', diffHours);
+
+                if (diffHours > 24 || diffHours
+                &lt;
+                -1) {
+                console.warn('Suspicious time difference detected:', diffHours, 'hours');
+                }
+
+                } catch (e) {
+                console.error('Error parsing timer start time:', startIsoStr, e);
+                return;
+                }
+
+                $timerBadge.removeClass('d-none');
+                if (timerInterval) clearInterval(timerInterval);
+
+                function pad(n) { return n
+                &lt;
+                10 ? '0' + n : n; }
+
+                function updateTimer() {
+                if (isPaused) return; // Don't update when paused
+
+                const now = new Date();
+
+                // CRITICAL: Calculate ONLY the time difference without timezone confusion
+                let diffMs = now.getTime() - start.getTime();
+                let diffSeconds = Math.max(0, Math.floor(diffMs / 1000));
+
+                const hours = Math.floor(diffSeconds / 3600);
+                const minutes = Math.floor((diffSeconds % 3600) / 60);
+                const seconds = diffSeconds % 60;
+
+                const timeStr = pad(hours) + ':' + pad(minutes) + ':' + pad(seconds);
+                $timerBadge.text(timeStr);
+
+                // Debug every minute
+                if (diffSeconds % 60 === 0 &amp;&amp; diffSeconds > 0) {
+                console.log('Timer update: ' + timeStr + ' (' + diffSeconds + 's elapsed)');
+                console.log('Start: ' + start.toISOString() + ', Now: ' + now.toISOString());
+                }
+                }
+
+                // Start immediately
+                updateTimer();
+                timerInterval = setInterval(updateTimer, 1000);
+
+                console.log('Timer started successfully from 00:00:00');
+                }
+
+                // Initialize timer if running
+                const startIso = $timerBadge.data('start');
+                if (startIso) {
+                console.log('Found existing timer data:', startIso);
+                startUiTimer(startIso);
+                } else {
+                console.log('No active timer found');
+                }
+
+                // Function untuk refresh timesheet table
+                function refreshTimesheetTable() {
+                setTimeout(function() {
+                window.location.reload();
+                }, 1000);
+                }
+
+                // Timesheet popup handlers
+                function openTimesheetPopup(taskId, timesheetId) {
+                timesheetId = timesheetId || null;
+                $('#current_task_id').val(taskId || $('#current_task_id').val());
+                if (timesheetId) {
+                $.get('/portal/task/' + taskId + '/timesheet/' + timesheetId, function(timesheet) {
+                if (timesheet.error) {
+                alert('Error: ' + timesheet.error);
+                return;
+                }
+                populateTimesheetForm(timesheet);
+                }).fail(function() {
+                alert('Failed to load timesheet data');
+                });
+                } else {
+                $('#timesheetForm')[0].reset();
+                $('#timesheet_id').val('');
+                }
+                $('#timesheetModal').modal('show');
+                }
+
+                function populateTimesheetForm(timesheet) {
+                $('#timesheet_id').val(timesheet.id);
+                $('#timesheet_start_date').val(timesheet.start_date || '');
+                $('#timesheet_end_date').val(timesheet.end_date || '');
+                $('#timesheet_description').val(timesheet.description);
+                $('#timesheet_employee').val(timesheet.employee_id).trigger('change');
+                $('#timesheet_hours').val(timesheet.hours);
+                }
+
+                $(document).on('click', '.add-timesheet-btn, .edit-timesheet-btn', function() {
+                var taskId = $(this).data('task-id');
+                var timesheetId = $(this).data('timesheet-id');
+                openTimesheetPopup(taskId, timesheetId);
+                });
+
+                $('#saveTimesheetBtn').click(function() {
+                var taskId = $('#current_task_id').val();
+                var formData = new FormData($('#timesheetForm')[0]);
+                formData.append('csrf_token', csrf_token);
+
+                $.ajax({
+                url: '/portal/task/' + taskId + '/timesheet',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                dataType: 'json',
+                success: function(result) {
+                if (result.success) {
+                $('#timesheetModal').modal('hide');
+                refreshTimesheetTable();
+                } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+                }
+                },
+                error: function() {
+                alert('Failed to save timesheet');
+                }
+                });
+                });
+
+                // Subtask popup handlers
+                function openSubtaskPopup(taskId, subtaskId) {
+                subtaskId = subtaskId || null;
+                $('#current_task_id').val(taskId || $('#current_task_id').val());
+
+                if (subtaskId) {
+                $.get('/portal/task/' + taskId + '/subtask/' + subtaskId, function(subtask) {
+                if (subtask.error) {
+                alert('Error: ' + subtask.error);
+                return;
+                }
+                populateSubtaskForm(subtask);
+                }).fail(function() {
+                alert('Failed to load subtask data');
+                });
+                } else {
+                $('#subtaskForm')[0].reset();
+                $('#subtask_id').val('');
+                // FIXED: Auto-populate dengan master task jika ada
+                var masterTaskSelect = $('#subtask_master_task');
+                if (masterTaskSelect.length > 0 &amp;&amp; masterTaskSelect.find('option').length > 1) {
+                // Select first available master task sebagai default
+                masterTaskSelect.val(masterTaskSelect.find('option:eq(1)').val()).trigger('change');
+                }
+                }
+                $('#subtaskModal').modal('show');
+                }
+
+                function populateSubtaskForm(subtask) {
+                $('#subtask_id').val(subtask.id);
+                $('#subtask_name').val(subtask.name);
+                $('#subtask_master_task').val(subtask.z_master_task_id).trigger('change');
+                $('#subtask_status').val(subtask.z_project_task_state).trigger('change');
+                $('#subtask_head_assignes').val(subtask.z_head_assignes_ids).trigger('change');
+                $('#subtask_member_assignes').val(subtask.z_member_assignes_ids).trigger('change');
+                }
+
+                $(document).on('click', '.add-subtask-btn, .edit-subtask-btn', function() {
+                var taskId = $(this).data('task-id');
+                var subtaskId = $(this).data('subtask-id');
+                openSubtaskPopup(taskId, subtaskId);
+                });
+
+                $('#saveSubtaskBtn').click(function() {
+                var taskId = $('#current_task_id').val();
+                var formData = new FormData($('#subtaskForm')[0]);
+                formData.append('csrf_token', csrf_token);
+
+                $.ajax({
+                url: '/portal/task/' + taskId + '/subtask',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                dataType: 'json',
+                success: function(result) {
+                if (result.success) {
+                $('#subtaskModal').modal('hide');
+                // FIXED: Redirect ke parent subtasks list jika dari parent
+                var currentUrl = window.location.href;
+                if (currentUrl.includes('/parent/')) {
+                location.reload();
+                } else {
+                location.reload();
+                }
+                } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+                }
+                },
+                error: function() {
+                alert('Failed to save subtask');
+                }
+                });
+                });
+
+                // Invoice plan popup handlers
+                function openInvoicePlanPopup(taskId, invoicePlanId) {
+                invoicePlanId = invoicePlanId || null;
+                $('#current_task_id').val(taskId || $('#current_task_id').val());
+
+                if (invoicePlanId) {
+                $.get('/portal/task/' + taskId + '/invoice-plan/' + invoicePlanId, function(invoicePlan) {
+                if (invoicePlan.error) {
+                alert('Error: ' + invoicePlan.error);
+                return;
+                }
+                populateInvoicePlanForm(invoicePlan);
+                }).fail(function() {
+                alert('Failed to load invoice plan data');
+                });
+                } else {
+                $('#invoicePlanForm')[0].reset();
+                $('#invoice_plan_id').val('');
+                }
+                $('#invoicePlanModal').modal('show');
+                }
+
+                function populateInvoicePlanForm(invoicePlan) {
+                $('#invoice_plan_id').val(invoicePlan.id);
+                $('#invoice_number').val(invoicePlan.z_number_of_invoice);
+                $('#invoice_description').val(invoicePlan.z_name);
+                $('#invoice_date').val(invoicePlan.z_invoice_date);
+                $('#invoice_amount').val(invoicePlan.z_amount_total);
+                $('#invoice_status').val(invoicePlan.z_state).trigger('change');
+                }
+
+                $(document).on('click', '.add-invoice-plan-btn, .edit-invoice-plan-btn', function() {
+                var taskId = $(this).data('task-id');
+                var invoicePlanId = $(this).data('invoice-id');
+                openInvoicePlanPopup(taskId, invoicePlanId);
+                });
+
+                $('#saveInvoicePlanBtn').click(function() {
+                var taskId = $('#current_task_id').val();
+                var formData = new FormData($('#invoicePlanForm')[0]);
+                formData.append('csrf_token', csrf_token);
+
+                $.ajax({
+                url: '/portal/task/' + taskId + '/invoice-plan',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                dataType: 'json',
+                success: function(result) {
+                if (result.success) {
+                $('#invoicePlanModal').modal('hide');
+                location.reload();
+                } else {
+                alert('Error: ' + (result.error || 'Unknown error'));
+                }
+                },
+                error: function() {
+                alert('Failed to save invoice plan');
+                }
+                });
+                });
+
+                // CRITICAL FIX: Timer Start/Stop dengan proper UTC handling dan PAUSE functionality
+                $(document).on('click', '#btnTimeStart', function(e) {
+                e.preventDefault();
+                const taskId = $(this).data('task-id');
+                const isResuming = isPaused;
+
+                console.log('=== TIMER START/RESUME REQUEST ===');
+                console.log('Task ID:', taskId);
+                console.log('Is Resuming:', isResuming);
+                console.log('Current browser UTC time:', new Date().toISOString());
+
+                const action = isResuming ? 'resume' : 'start';
+
+                $.post('/portal/task/' + taskId + '/timer', {
+                action: action,
+                csrf_token: csrf_token
+                }, function(r) {
+                console.log('=== TIMER START/RESUME RESPONSE ===');
+                console.log('Full server response:', r);
+
+                if (r.success) {
+                console.log('Server returned start_at:', r.start_at);
+
+                // Clear any existing timer first
+                if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+                }
+
+                // Start/Resume timer with server time
+                startUiTimer(r.start_at);
+                isPaused = false;
+
+                // Update button states
+                $('#btnTimeStart').prop('disabled', true).find('span').text('Time Start');
+                $('#btnTimePause').prop('disabled', false).show();
+                $('#btnTimeStop').prop('disabled', false);
+
+                // Update timer badge
+                $timerBadge.removeClass('bg-warning').addClass('bg-primary').text('00:00:00');
+
+                // Reload page after 2 seconds if starting fresh
+                if (!isResuming) {
+                setTimeout(function() {
+                location.reload();
+                }, 2000);
+                }
+                } else {
+                alert('Error: ' + (r.error || 'Unknown error'));
+                }
+                }, 'json').fail(function(xhr, status, error) {
+                console.error('Timer start/resume request failed:', status, error);
+                if (xhr.responseText) {
+                console.error('Response text:', xhr.responseText);
+                }
+                alert('Failed to start/resume timer: ' + error);
+                });
+                });
+
+                // NEW: Pause button handler
+                $(document).on('click', '#btnTimePause', function(e) {
+                e.preventDefault();
+                const taskId = $(this).data('task-id');
+
+                console.log('=== TIMER PAUSE REQUEST ===');
+                console.log('Task ID:', taskId);
+
+                $.post('/portal/task/' + taskId + '/timer', {
+                action: 'pause',
+                csrf_token: csrf_token
+                }, function(r) {
+                console.log('=== TIMER PAUSE RESPONSE ===');
+                console.log('Server response:', r);
+
+                if (r.success) {
+                isPaused = true;
+
+                // Update UI untuk paused state
+                $('#btnTimeStart').prop('disabled', false).find('span').text('Resume');
+                $('#btnTimePause').prop('disabled', true).hide();
+                $('#btnTimeStop').prop('disabled', false);
+
+                // Update timer badge untuk indicate paused
+                $timerBadge.removeClass('bg-primary').addClass('bg-warning');
+
+                alert('Timer paused successfully');
+                } else {
+                alert('Error: ' + (r.error || 'Unknown error'));
+                }
+                }, 'json').fail(function(xhr, status, error) {
+                console.error('Timer pause request failed:', status, error);
+                alert('Failed to pause timer: ' + error);
+                });
+                });
+
+                $(document).on('click', '#btnTimeStop', function(e) {
+                e.preventDefault();
+                $('#timerStopModal').modal('show');
+                });
+
+                // FIXED: Timer Stop dengan validation dan attachment (XML Compatible)
+                $('#confirmStopBtn').click(function() {
+                const taskId = $(this).data('task-id');
+                const desc = $('#timerStopDescription').val().trim();
+
+                // VALIDATION: Description wajib diisi
+                if (!desc) {
+                alert('Description is required when stopping timer');
+                $('#timerStopDescription').focus();
+                return;
+                }
+
+                console.log('=== TIMER STOP REQUEST ===');
+                console.log('Task ID:', taskId);
+                console.log('Description:', desc);
+
+                // FIXED: Handle file uploads dengan FormData
+                const formData = new FormData();
+                formData.append('action', 'stop');
+                formData.append('description', desc);
+                formData.append('csrf_token', csrf_token);
+
+                // FIXED: Add uploaded files dengan key yang benar
+                const fileInput = $('#timerAttachments')[0];
+                if (fileInput.files &amp;&amp; fileInput.files.length > 0) {
+                for (let i = 0; i&lt; fileInput.files.length; i++) {
+                formData.append('attachments', fileInput.files[i]);
+                }
+                console.log('Adding ' + fileInput.files.length + ' file(s) to upload');
+                }
+
+                // Show loading state
+                $('#confirmStopBtn').prop('disabled', true).text('Stopping...');
+
+                $.ajax({
+                url: '/portal/task/' + taskId + '/timer',
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                dataType: 'json',
+                success: function(r) {
+                console.log('=== TIMER STOP RESPONSE ===');
+                console.log('Server response:', r);
+
+                if (r.success) {
+                // Stop the UI timer
+                if (timerInterval) {
+                clearInterval(timerInterval);
+                timerInterval = null;
+                }
+                $timerBadge.addClass('d-none');
+                isPaused = false;
+
+                // Update button states
+                $('#btnTimeStart').prop('disabled', false).find('span').text('Time Start');
+                $('#btnTimePause').prop('disabled', true).hide();
+                $('#btnTimeStop').prop('disabled', true);
+
+                // Close modal and reset
+                $('#timerStopModal').modal('hide');
+                $('#timerStopDescription').val('');
+                $('#timerAttachments').val('');
+
+                // Show success message
+                if (r.attachments_count > 0) {
+                alert('Timer stopped successfully with ' + r.attachments_count + ' attachment(s) saved!');
+                } else {
+                alert('Timer stopped successfully!');
+                }
+
+                // Reload page after 1 second
+                setTimeout(function() {
+                location.reload();
+                }, 1000);
+                } else {
+                alert('Error: ' + (r.error || 'Unknown error'));
+                }
+                },
+                error: function(xhr, status, error) {
+                console.error('Timer stop request failed:', status, error);
+                alert('Failed to stop timer: ' + error);
+                },
+                complete: function() {
+                // Reset button state
+                $('#confirmStopBtn').prop('disabled', false).text('Stop &amp; Save');
+                }
+                });
+                });
+
+                // Delete handlers
+                $(document).on('click', '.delete-timesheet-btn, .delete-subtask-btn', function(e) {
+                e.preventDefault();
+                if (!confirm('Are you sure you want to delete this item?')) return;
+
+                var $form = $(this).closest('form');
+                $.ajax({
+                url: $form.attr('action'),
+                type: 'POST',
+                data: $form.serialize(),
+                dataType: 'json',
+                success: function(result) {
+                if (result.success) {
+                location.reload();
+                } else {
+                alert('Failed to delete: ' + (result.error || 'Unknown error'));
+                }
+                },
+                error: function() {
+                alert('Failed to delete item');
+                }
+                });
+                });
+
+                // FIXED: Format number inputs - left alignment
+                function formatNumberInputs() {
+                $('input[type="number"]').on('blur', function() {
+                var value = parseFloat($(this).val());
+                if (!isNaN(value)) {
+                $(this).val(value.toFixed(2));
+                }
+                });
+
+                // Format hours display
+                $('.timesheet-hours').each(function() {
+                var hoursVal = parseFloat($(this).text());
+                if (!isNaN(hoursVal)) {
+                $(this).text(hoursVal.toFixed(2) + ' hours');
+                }
+                });
+                }
+
+                // Initialize format functions
+                formatNumberInputs();
+
+                // FIXED: Format existing percentage displays - left aligned
+                $('.percentage-input').each(function() {
+                var value = parseFloat($(this).val());
+                if (!isNaN(value)) {
+                $(this).val(value.toFixed(2));
+                }
+                // Ensure left alignment
+                $(this).css('text-align', 'left');
+                });
+
+                // FIXED: Ensure all number inputs are left aligned
+                $('input[type="number"]').css('text-align', 'left');
+
+                // XML-COMPATIBLE: File preview functionality untuk timer attachments
+                $('#timerAttachments').on('change', function() {
+                const files = this.files;
+                let preview = $('#filePreview');
+
+                if (preview.length === 0) {
+                var previewDiv = $('<div></div>').attr('id', 'filePreview').addClass('mt-2');
+                $(this).after(previewDiv);
+                preview = $('#filePreview');
+                }
+
+                preview.empty();
+
+                if (files.length > 0) {
+                var fileListContainer = $('<div></div>');
+                var fileLabel = $('<small></small>').addClass('text-muted').text('Selected files:');
+                fileListContainer.append(fileLabel);
+                fileListContainer.append($('&lt;br/&gt;'));
+
+                for (let i = 0; i&lt; files.length; i++) {
+                var fileBadge = $('<small></small>')
+                .addClass('badge bg-light text-dark me-1')
+                .text(files[i].name);
+                fileListContainer.append(fileBadge);
+                }
+
+                preview.append(fileListContainer);
+                }
+                });
+
+                // XML-COMPATIBLE: Real-time validation untuk description
+                $('#timerStopDescription').on('input', function() {
+                const val = $(this).val().trim();
+                const errorDiv = $('#descriptionError');
+                const stopBtn = $('#confirmStopBtn');
+
+                if (val.length === 0) {
+                $(this).addClass('is-invalid');
+                if (errorDiv.length > 0) {
+                errorDiv.removeClass('d-none');
+                }
+                stopBtn.prop('disabled', true);
+                } else {
+                $(this).removeClass('is-invalid');
+                if (errorDiv.length > 0) {
+                errorDiv.addClass('d-none');
+                }
+                stopBtn.prop('disabled', false);
+                }
+                });
+
+                // Make functions globally available
+                window.openTimesheetPopup = openTimesheetPopup;
+                window.openSubtaskPopup = openSubtaskPopup;
+                window.openInvoicePlanPopup = openInvoicePlanPopup;
+                window.formatNumberInputs = formatNumberInputs;
+                });
+
+                function updateTimesheetHours() {
+                var jam = parseInt($('#timesheet_jam').val()) || 0;
+                var menit = parseInt($('#timesheet_menit').val()) || 0;
+                // Kalkulasi total jam dalam desimal
+                var totalJam = jam + (menit / 60);
+                $('#timesheet_hours').val(totalJam.toFixed(2));
+                // Format tampil
+                var str = '';
+                if (jam > 0) str += jam + ' jam ';
+                if (menit > 0) str += menit + ' menit';
+                $('#timesheet_hours_display').text(str.trim() || '0 menit');
+                }
+                $('#timesheet_jam, #timesheet_menit').on('input change', updateTimesheetHours);
+                updateTimesheetHours();
+
+                // PATCH: Saat popup timesheet dibuka, reset jam-menit
+                $('#timesheetModal').on('show.bs.modal', function() {
+                $('#timesheet_jam').val(0);
+                $('#timesheet_menit').val(0);
+                updateTimesheetHours();
+                });
+
+                // PATCH: TOMBOL FINISH TASK => "Submit"
+                $('form').find('button[type="submit"]').each(function() {
+                if ($(this).text().includes('Finish Task')) {
+                $(this).html('<i class="fa fa-check me-1"></i>Submit');
+                }
+                });
+
+                // PATCH: Refresh UI timer badge lebih halus
+                function refreshTimerUI() {
+                $('#runningTimerBadge').fadeOut(200, function() {
+                $(this).fadeIn(300).text('00:00:00').removeClass('bg-warning').addClass('bg-primary');
+                });
+                }
+
+                // PATCH: Navigasi subtasks, back tetap scope parent
+                $('.btn-back-to-parent').on('click', function(e) {
+                var parentId = $(this).data('parent-id');
+                if (parentId) {
+                window.location.href = '/portal/tasks/parent/' + parentId;
+                }
+                });
+            </script>
+
+            <!-- CSS Styles tetap sama seperti sebelumnya -->
+            <style>
+                /* === BASIC SELECT2 STYLES === */
+                .select2-container--default .select2-selection--single {
+                height: 35px;
+                border: 1px solid #dee2e6;
+                border-radius: 5px;
+                }
+                .select2-container--default .select2-selection--single .select2-selection__rendered {
+                line-height: 28px;
+                padding-left: 10px;
+                padding-top: 1px;
+                }
+                .select2-container--default .select2-selection--single .select2-selection__arrow {
+                height: 35px;
+                width: 30px;
+                top: 1px;
+                }
+                .select2-container .select2-selection--multiple {
+                min-height: 35px;
+                }
+                .select2-container--default .select2-selection--multiple {
+                height: auto !important;
+                border-color: #dee2e6;
+                border-radius: 5px;
+                }
+                .select2-container--default .select2-selection--multiple .select2-selection__choice {
+                background-color: #dee2e6;
+                color: #495057;
+                border: 1px solid #dee2e6;
+                }
+                .select2-container--default.select2-container--focus .select2-selection--multiple {
+                border-color: #dee2e6;
+                }
+
+                /* === ENHANCED TIMER BADGE - UKURAN BESAR === */
+                #runningTimerBadge.timer-badge {
+                font-size: 18px !important;
+                font-weight: 700 !important;
+                padding: 10px 14px !important;
+                border-radius: 6px !important;
+                font-family: 'Courier New', monospace !important;
+                letter-spacing: 0.5px !important;
+                min-width: 85px !important;
+                text-align: center !important;
+                animation: timer-pulse 2s infinite;
+                }
+
+                /* === PROPER BUTTON SIZES === */
+                .btn {
+                padding: 0.5rem 1rem !important;
+                font-size: 0.9rem !important;
+                border-radius: 0.375rem !important;
+                transition: all 0.2s ease;
+                }
+
+                .btn-sm {
+                padding: 0.375rem 0.75rem !important;
+                font-size: 0.875rem !important;
+                }
+
+                .action-btn {
+                padding: 0.5rem 1rem !important;
+                font-size: 0.9rem !important;
+                font-weight: 500 !important;
+                border-radius: 6px !important;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+
+                .action-btn:hover {
+                transform: translateY(-1px);
+                box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+                }
+
+                /* === STATUS BADGE - UKURAN YANG PROPER === */
+                .status-badge {
+                font-size: 0.9rem !important;
+                padding: 0.5rem 0.75rem !important;
+                border-radius: 0.375rem !important;
+                font-weight: 600 !important;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+
+                /* === SUBTASKS BUTTON === */
+                .subtasks-btn {
+                font-weight: 500 !important;
+                border-radius: 6px !important;
+                padding: 0.5rem 0.75rem !important;
+                font-size: 0.9rem !important;
+                transition: all 0.2s ease;
+                }
+
+                .subtasks-btn:hover {
+                background-color: #6c757d !important;
+                border-color: #6c757d !important;
+                color: white !important;
+                text-decoration: none;
+                transform: translateY(-1px);
+                }
+
+                /* === CONDITIONAL FIELD VISIBILITY === */
+                .maintenance-only {
+                display: none;
+                }
+
+                .maintenance-visible {
+                display: block;
+                }
+
+                /* === READONLY FIELD STYLING === */
+                .form-control[readonly] {
+                background-color: #f8f9fa !important;
+                border-color: #e9ecef !important;
+                opacity: 1 !important;
+                color: #6c757d !important;
+                cursor: not-allowed;
+                }
+
+                .form-select[readonly] {
+                background-color: #f8f9fa !important;
+                border-color: #e9ecef !important;
+                opacity: 1 !important;
+                color: #6c757d !important;
+                cursor: not-allowed;
+                pointer-events: none;
+                }
+
+                /* === PERCENTAGE INPUT STYLING === */
+                .input-group .form-control {
+                text-align: left !important;
+                border-right: 1px solid #ced4da;
+                }
+
+                .input-group .input-group-text {
+                border-left: 1px solid #ced4da;
+                background-color: #f8f9fa;
+                color: #6c757d;
+                font-weight: 500;
+                }
+
+                .percentage-input {
+                text-align: right;
+                }
+
+                input[type="number"] {
+                text-align: left !important;
+                }
+
+                #task_chatter {
+                margin-top: 3rem !important;
+                padding-top: 2rem !important;
+                border-top: 2px solid #e9ecef !important;
+                }
+
+                /* === FILE UPLOAD STYLING === */
+                .form-control[type="file"] {
+                padding: 0.375rem 0.75rem;
+                border: 2px dashed #dee2e6;
+                border-radius: 0.5rem;
+                background-color: #fafafa;
+                transition: all 0.2s ease;
+                }
+
+                .form-control[type="file"]:hover {
+                border-color: #007bff;
+                background-color: #f0f8ff;
+                }
+
+                .form-control[type="file"]:focus {
+                border-color: #007bff;
+                box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+                }
+
+                .form-text {
+                font-size: 0.875em;
+                color: #6c757d;
+                margin-top: 0.25rem;
+                }
+
+                /* === LAYOUT RESPONSIF === */
+                .task-header {
+                margin-bottom: 1.5rem;
+                padding: 1rem 0;
+                border-bottom: 1px solid #e9ecef;
+                }
+
+                .task-title {
+                font-size: 1.5rem;
+                font-weight: 600;
+                color: #2c3e50;
+                max-width: 300px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                }
+
+                /* === STATUS BADGE DAN SUBTASKS CONTAINER === */
+                .status-subtasks-container {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                flex-wrap: wrap;
+                }
+
+                /* === NOTEBOOK/TABS === */
+                .nav-tabs {
+                border-bottom: 2px solid #dee2e6;
+                margin-bottom: 1.5rem;
+                }
+
+                .nav-tabs .nav-link {
+                color: #495057;
+                font-weight: 500;
+                border-radius: 0.5rem 0.5rem 0 0;
+                margin-right: 0.25rem;
+                transition: all 0.2s ease;
+                }
+
+                .nav-tabs .nav-link:hover {
+                border-color: #e9ecef #e9ecef #dee2e6;
+                background-color: #f8f9fa;
+                }
+
+                .nav-tabs .nav-link.active {
+                color: #007bff;
+                background-color: #fff;
+                border-color: #dee2e6 #dee2e6 #fff;
+                font-weight: 600;
+                }
+
+                .tab-content {
+                min-height: 300px;
+                }
+
+                /* === TABLE STYLES === */
+                .timesheet-table th, .timesheet-table td {
+                vertical-align: middle;
+                padding: 0.75rem;
+                }
+
+                .timesheet-table th {
+                background-color: #f8f9fa;
+                font-weight: 600;
+                color: #495057;
+                border-bottom: 2px solid #dee2e6;
+                }
+
+                .timesheet-table .text-danger {
+                color: #dc3545 !important;
+                }
+
+                .table-responsive {
+                border-radius: 0.5rem;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                border: 1px solid #e9ecef;
+                }
+
+                /* === CARDS === */
+                .card {
+                border: 1px solid #dee2e6;
+                border-radius: 0.5rem;
+                margin-bottom: 1rem;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                transition: all 0.2s ease;
+                }
+
+                .card:hover {
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                transform: translateY(-1px);
+                }
+
+                .card-body {
+                font-size: 0.875rem;
+                padding: 1.25rem;
+                }
+
+                .card-title {
+                font-weight: 600;
+                color: #2c3e50;
+                }
+
+                /* === BADGES === */
+                .badge {
+                font-weight: 500;
+                border-radius: 0.375rem;
+                padding: 0.375rem 0.75rem;
+                font-size: 0.75rem;
+                }
+
+                /* === FORMS === */
+                .form-control, .form-select {
+                border-radius: 0.375rem;
+                border: 1px solid #ced4da;
+                font-size: 0.875rem;
+                transition: all 0.2s ease;
+                text-align: left !important;
+                padding-left: 0.75rem !important;
+                }
+
+                .form-control:focus, .form-select:focus {
+                border-color: #007bff;
+                box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+                transform: scale(1.01);
+                }
+
+                .form-label {
+                font-weight: 600;
+                color: #495057;
+                margin-bottom: 0.5rem;
+                }
+
+                /* === ALERTS === */
+                .alert {
+                border-radius: 0.5rem;
+                font-size: 0.875rem;
+                border: 1px solid;
+                padding: 1rem;
+                }
+
+                .alert-info {
+                background-color: #e7f3ff;
+                border-color: #b6d7ff;
+                color: #0c5460;
+                }
+
+                .alert-warning {
+                background-color: #fff3cd;
+                border-color: #ffeaa7;
+                color: #856404;
+                }
+
+                /* === MOBILE RESPONSIVENESS === */
+                @media (max-width: 767.98px) {
+                .timer-badge {
+                font-size: 16px !important;
+                padding: 8px 10px !important;
+                min-width: 70px !important;
+                }
+
+                .task-title {
+                font-size: 1.25rem;
+                max-width: 200px;
+                }
+
+                .btn {
+                padding: 0.375rem 0.75rem !important;
+                font-size: 0.8rem !important;
+                }
+
+                .action-btn {
+                padding: 0.375rem 0.75rem !important;
+                font-size: 0.8rem !important;
+                }
+
+                .status-badge {
+                font-size: 0.8rem !important;
+                padding: 0.375rem 0.5rem !important;
+                }
+
+                .subtasks-btn {
+                padding: 0.375rem 0.5rem !important;
+                font-size: 0.8rem !important;
+                }
+
+                .status-subtasks-container {
+                gap: 0.5rem;
+                }
+
+                .nav-tabs {
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                margin-bottom: 1rem;
+                }
+
+                .nav-tabs .nav-link {
+                white-space: nowrap;
+                font-size: 0.875rem;
+                padding: 0.5rem 0.75rem;
+                }
+
+                .form-control, .form-select {
+                font-size: 0.875rem;
+                }
+
+                .table-responsive {
+                border: none;
+                font-size: 0.875rem;
+                }
+
+                .card-body {
+                padding: 1rem;
+                }
+
+                .modal-dialog {
+                margin: 1rem;
+                }
+                }
+
+                /* === DESKTOP ENHANCEMENTS === */
+                @media (min-width: 768px) {
+                .timer-badge {
+                font-size: 20px !important;
+                padding: 12px 16px !important;
+                min-width: 90px !important;
+                }
+
+                .task-title {
+                font-size: 1.75rem;
+                }
+
+                .btn {
+                padding: 0.5rem 1rem !important;
+                font-size: 0.95rem !important;
+                }
+
+                .action-btn {
+                padding: 0.5rem 1rem !important;
+                font-size: 0.95rem !important;
+                }
+
+                .status-badge {
+                font-size: 1rem !important;
+                padding: 0.5rem 0.75rem !important;
+                }
+
+                .timesheet-table th,
+                .timesheet-table td {
+                vertical-align: middle;
+                white-space: nowrap;
+                }
+
+                .table-responsive {
+                border-radius: 0.5rem;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                }
+
+                .form-control:hover, .form-select:hover {
+                border-color: #007bff;
+                }
+                }
+
+                /* === ANIMATION FOR TIMER === */
+                @keyframes timer-pulse {
+                0%, 100% {
+                opacity: 1;
+                transform: scale(1);
+                }
+                50% {
+                opacity: 0.8;
+                transform: scale(1.05);
+                }
+                }
+
+                .timer-badge.running {
+                animation: timer-pulse 2s infinite;
+                }
+
+                /* === ENHANCED FORM SECTIONS === */
+                .form-section {
+                background-color: #ffffff;
+                border: 1px solid #e9ecef;
+                border-radius: 0.5rem;
+                padding: 1.5rem;
+                margin-bottom: 1.5rem;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                }
+
+                /* === FOCUS IMPROVEMENTS === */
+                .form-control:focus,
+                .form-select:focus,
+                .btn:focus {
+                outline: none;
+                box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+                }
+
+                .group-header {
+                background-color: #f8f9fa;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                border-radius: 0.25rem;
+                padding: 0.75rem;
+                }
+
+                .group-header:hover {
+                background-color: #e9ecef;
+                transform: translateX(4px);
+                }
+
+                .collapse:not(.show) {
+                display: none;
+                }
+
+                .collapse.show {
+                display: table-row;
+                }
+
+                .limit-2-lines {
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                word-break: break-word;
+                }
+            </style>
+
+            <t t-set="breadcrumbs_searchbar" t-value="True"/>
+
+            <!-- Breadcrumb -->
+            <ol class="breadcrumb">
+                <li class="breadcrumb-item">
+                    <a href="/portal" accesskey="H">Home</a>
+                </li>
+                <t t-if="project_id and project">
+                    <li class="breadcrumb-item">
+                        <a href="/portal/projects">Projects</a>
+                    </li>
+                    <li class="breadcrumb-item">
+                        <a t-attf-href="/portal/projects/#{project.id}?view_type=form" t-esc="project.name"/>
+                    </li>
+                </t>
+                <t t-if="parent_task">
+                    <li class="breadcrumb-item">
+                        <a t-attf-href="/portal/task/#{parent_task.id}?mode=edit" t-esc="parent_task.name"/>
+                    </li>
+                </t>
+                <li class="breadcrumb-item active">
+                    <t t-esc="page_name"/>
+                </li>
+            </ol>
+
+            <!-- Error Message -->
+            <t t-if="kw.get('error')">
+                <div class="alert alert-danger" role="alert">
+                    <t t-esc="kw.get('error')"/>
+                </div>
+            </t>
+
+            <!-- Success Message -->
+            <t t-if="kw.get('success')">
+                <div class="alert alert-success" role="alert">
+                    <t t-esc="kw.get('success')"/>
+                </div>
+            </t>
+
+            <!-- Mode New Task -->
+            <t t-if="kw.get('mode') == 'new'">
+                <t t-set="current_parent_id" t-value="parent_id or kw.get('parent_id')"/>
+                <t t-set="page_name" t-value="'New Subtask' if current_parent_id else 'New Task'"/>
+                <div class="o_portal_tasks_header row mb-4 d-flex align-items-center">
+                    <div class="col-auto d-flex align-items-center">
+                        <t t-if="current_parent_id">
+                            <a t-attf-href="/portal/tasks/parent/#{current_parent_id}"
+                               class="btn btn-primary d-flex align-items-center me-2">
+                                <i class="fa fa-chevron-left me-2 mt-1"/>
+                                Back to Subtasks
+                            </a>
+                        </t>
+                        <t t-if="not current_parent_id">
+                            <a href="/portal/tasks"
+                               class="btn btn-primary d-flex align-items-center me-2">
+                                <i class="fa fa-chevron-left me-2 mt-1"/>
+                                Back to Tasks
+                            </a>
+                        </t>
+
+                        <button type="submit" class="btn btn-link p-0 ms-2 mt-2" form="new_task_form"
+                                title="Save Task">
+                            <i class="fa fa-cloud-download fa-md"/>
+                        </button>
+
+                        <!-- FIXED: Status Badge untuk new task -->
+                        <div class="d-flex align-items-center ms-3">
+                            <span class="badge bg-info text-white status-badge">
+                                New
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <form id="new_task_form" action="/portal/tasks" method="post">
+                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                    <input type="hidden" name="mode" value="new"/>
+                    <input type="hidden" name="parent_id" t-att-value="parent_id or ''"/>
+
+                    <!-- FIXED: Auto-fill project_id jika ini subtask atau dari project smart button -->
+                    <t t-if="parent_id and parent_task">
+                        <input type="hidden" name="project_id" t-att-value="parent_task.project_id.id"/>
+                    </t>
+                    <t t-elif="project_id">
+                        <input type="hidden" name="project_id" t-att-value="project_id"/>
+                    </t>
+                    <t t-else="">
+                        <input type="hidden" name="project_id"
+                               t-att-value="request.httprequest.args.get('project_id', '')"/>
+                    </t>
+
+                    <!-- Form fields -->
+                    <div class="row">
+                        <div class="col-lg-6">
+                            <div class="form-group">
+                                <label>Task Code</label>
+                                <!-- FIXED: Auto-generate name untuk subtask atau parent task -->
+                                <input type="text" class="form-control" name="name"
+                                       t-att-value="('Subtask of ' + parent_task.name) if (parent_id and parent_task) else (project_name if project_name else '')"
+                                       t-att-readonly="'readonly' if parent_id else False"/>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Name of Task</label>
+                                <select name="z_master_task_id" class="form-select js-example-basic-single"
+                                        required="required">
+                                    <option value="">Select Master Task...</option>
+                                    <t t-foreach="master_tasks or []" t-as="master_task">
+                                        <option t-att-value="master_task.id">
+                                            <t t-esc="master_task.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="project_id">Project</label>
+                                <!-- FIXED: Readonly jika subtask atau dari smart button, auto-select project -->
+                                <select name="project_id" class="form-select js-example-basic-single"
+                                        t-att-readonly="'readonly' if (parent_id or project_id) else False">
+                                    <option value="">select...</option>
+                                    <t t-foreach="request.env['project.project'].sudo().search([])"
+                                       t-as="project_option">
+                                        <option t-att-value="project_option.id"
+                                                t-att-selected="(parent_id and parent_task and project_option.id == parent_task.project_id.id) or (project_id and project_option.id == project_id) or (not parent_id and project_option.id == int(request.httprequest.args.get('project_id', 0)))">
+                                            <t t-esc="project_option.name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_name_of_project">Name of Project</label>
+                                <!-- FIXED: Auto-fill dari parent atau project -->
+                                <input type="text" class="form-control" name="z_name_of_project"
+                                       t-att-value="z_name_of_project or ''"
+                                       readonly="readonly"/>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="customer_id">Customer</label>
+                                <!-- FIXED: Auto-fill customer dari parent atau project -->
+                                <input type="text" class="form-control"
+                                       t-att-value="customer_name or ''"
+                                       readonly="readonly" placeholder="No customer selected"/>
+                                <input type="hidden" name="customer_id"
+                                       t-att-value="customer_id or ''"/>
+                            </div>
+
+                            <!-- FIXED: Auto-select assignees dari parent jika subtask -->
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_head_assignes_ids">Head Assignees</label>
+                                <select name="z_head_assignes_ids" id="z_head_assignes_ids"
+                                        class="form-control select2" multiple="multiple">
+                                    <option value="">Select Employee</option>
+                                    <t t-foreach="employees" t-as="employee">
+                                        <option t-att-value="employee.id">
+                                            <t t-esc="employee.name or 'Unnamed'"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_member_assignes_ids">Member Assignees</label>
+                                <select name="z_member_assignes_ids" id="z_member_assignes_ids"
+                                        class="form-control select2" multiple="multiple">
+                                    <option value="">Select Employee</option>
+                                    <t t-foreach="employees" t-as="employee">
+                                        <option t-att-value="employee.id">
+                                            <t t-esc="employee.name or 'Unnamed'"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <!-- FIXED: Auto-select technology dan severity dari parent jika subtask -->
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_technology_id">Technology</label>
+                                <select name="z_technology_id" class="form-select js-example-basic-single">
+                                    <option value="">select...</option>
+                                    <t t-foreach="technologies or []" t-as="tech">
+                                        <option t-att-value="tech.id"
+                                                t-att-selected="z_technology_id and tech.id == z_technology_id">
+                                            <t t-esc="tech.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_severity_id">Severity</label>
+                                <select name="z_severity_id" class="form-select js-example-basic-single">
+                                    <option value="">select...</option>
+                                    <t t-foreach="severities or []" t-as="severity">
+                                        <option t-att-value="severity.id"
+                                                t-att-selected="z_severity_id and severity.id == z_severity_id">
+                                            <t t-esc="severity.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_regional_id">Regional</label>
+                                <select name="z_regional_id" class="form-select js-example-basic-single">
+                                    <option value="">select...</option>
+                                    <t t-foreach="regionals or []" t-as="regional">
+                                        <option t-att-value="regional.id">
+                                            <t t-esc="regional.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Right column with dates and metrics -->
+                        <div class="col-lg-6">
+                            <div class="row">
+                                <div class="col-6">
+                                    <div class="mb-3">
+                                        <label for="z_planned_start_date" class="form-label">Planned Start Date</label>
+                                        <input type="date" class="form-control" id="z_planned_start_date"
+                                               name="z_planned_start_date"/>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="mb-3">
+                                        <label for="z_planned_end_date" class="form-label">Planned End Date</label>
+                                        <input type="date" class="form-control" id="z_planned_end_date"
+                                               name="z_planned_end_date"/>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-6">
+                                    <div class="mb-3">
+                                        <label for="z_actual_start_date" class="form-label">Actual Start Date</label>
+                                        <input type="date" class="form-control" id="z_actual_start_date"
+                                               name="z_actual_start_date" readonly="readonly"/>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="mb-3">
+                                        <label for="z_actual_end_date" class="form-label">Actual End Date</label>
+                                        <input type="date" class="form-control" id="z_actual_end_date"
+                                               name="z_actual_end_date" readonly="readonly"/>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="z_bobot" class="form-label">Bobot (%)</label>
+                                <div class="input-group">
+                                    <input type="number" step="0.01" min="0" max="100" class="form-control"
+                                           id="z_bobot" name="z_bobot" style="text-align: left !important;"
+                                           value="0.00"/>
+                                    <span class="input-group-text">%</span>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="z_mandays_budget" class="form-label">Budget Mandays</label>
+                                <input type="number" step="0.01" class="form-control" id="z_mandays_budget"
+                                       name="z_mandays_budget" style="text-align: left !important;" value="0.00"/>
+                            </div>
+                            <div class="mb-3">
+                                <label for="z_actual_budget_mandays" class="form-label">Actual Mandays</label>
+                                <input type="number" step="0.01" class="form-control" id="z_actual_budget_mandays"
+                                       name="z_actual_budget_mandays" style="text-align: left !important;"
+                                       value="0.00" readonly="readonly"/>
+                            </div>
+                            <div class="mb-3">
+                                <label for="z_progress_project" class="form-label">Progress (%)</label>
+                                <div class="input-group">
+                                    <input type="number" step="0.01" min="0" max="100" class="form-control"
+                                           id="z_progress_project" name="z_progress_project"
+                                           style="text-align: left !important;" value="0.00" readonly="readonly"/>
+                                    <span class="input-group-text">%</span>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="z_quality_entry" class="form-label">Quality (%)</label>
+                                <div class="input-group">
+                                    <input type="number" step="0.01" min="0" max="100" class="form-control"
+                                           id="z_quality_entry" name="z_quality_entry"
+                                           style="text-align: left !important;" value="0.00"/>
+                                    <span class="input-group-text">%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tabs for new task -->
+                    <ul class="nav nav-tabs" id="myTab" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="description-tab" data-bs-toggle="tab"
+                                    data-bs-target="#description" type="button" role="tab" aria-controls="description"
+                                    aria-selected="true">Description
+                            </button>
+                        </li>
+                    </ul>
+                    <div class="tab-content" id="myTabContent">
+                        <div class="tab-pane fade show active" id="description" role="tabpanel"
+                             aria-labelledby="description-tab">
+                            <div class="mt-3 mb-3 col-lg-12">
+                                <textarea class="form-control" name="description" rows="5"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </t>
+
+            <!-- Mode Edit Task -->
+            <t t-if="kw.get('mode') == 'edit' and task">
+                <t t-set="page_name" t-value="'Edit Task'"/>
+                <div class="o_portal_tasks_header task-header">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap">
+                        <!-- Left: Back + Title + Settings + Save + Timer -->
+                        <div class="d-flex align-items-center flex-wrap">
+                            <a t-att-href="'/portal/tasks' + ('/parent/' + str(parent_id) if parent_id else '')"
+                               class="btn btn-primary d-flex align-items-center me-2">
+                                <i class="fa fa-chevron-left me-1"/>
+                                <span class="d-none d-sm-inline">Back</span>
+                            </a>
+
+                            <h4 class="mb-0 me-3 task-title">
+                                <span t-field="task.name"/>
+                            </h4>
+
+                            <!-- Settings + Save + Timer -->
+                            <div class="d-flex align-items-center gap-2">
+                                <t t-if="task">
+                                    <button class="btn btn-link p-1" data-bs-toggle="modal"
+                                            data-bs-target="#taskSettingsModal" title="Settings">
+                                        <i class="fa fa-cog"/>
+                                    </button>
+
+                                    <!-- Settings Modal -->
+                                    <div class="modal fade" id="taskSettingsModal" tabindex="-1"
+                                         aria-labelledby="taskSettingsModalLabel" aria-hidden="true">
+                                        <div class="modal-dialog">
+                                            <div class="modal-content">
+                                                <div class="modal-header">
+                                                    <h5 class="modal-title" id="taskSettingsModalLabel">Settings</h5>
+                                                    <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                                            aria-label="Close"/>
+                                                </div>
+                                                <div class="modal-body">
+                                                    <div class="list-group">
+                                                        <form t-attf-action="/portal/task/#{task.id}" method="post"
+                                                              class="list-group-item list-group-item-action">
+                                                            <input type="hidden" name="csrf_token"
+                                                                   t-att-value="request.csrf_token()"/>
+                                                            <input type="hidden" name="function"
+                                                                   value="start_progress"/>
+                                                            <button type="submit" class="btn btn-link p-0"
+                                                                    title="Start Progress">
+                                                                <i class="fa fa-play me-2"/>
+                                                                Start Progress
+                                                            </button>
+                                                        </form>
+                                                        <form t-attf-action="/portal/task/#{task.id}" method="post"
+                                                              class="list-group-item list-group-item-action">
+                                                            <input type="hidden" name="csrf_token"
+                                                                   t-att-value="request.csrf_token()"/>
+                                                            <input type="hidden" name="function" value="finish_task"/>
+                                                            <button type="submit" class="btn btn-link p-0"
+                                                                    title="Finish Task">
+                                                                <i class="fa fa-check me-2"/>
+                                                                Finish Task
+                                                            </button>
+                                                        </form>
+                                                        <form t-attf-action="/portal/task/#{task.id}" method="post"
+                                                              class="list-group-item list-group-item-action">
+                                                            <input type="hidden" name="csrf_token"
+                                                                   t-att-value="request.csrf_token()"/>
+                                                            <input type="hidden" name="function" value="cancel"/>
+                                                            <button type="submit" class="btn btn-link p-0"
+                                                                    title="Mark as Failed">
+                                                                <i class="fa fa-times me-2"/>
+                                                                Cancel
+                                                            </button>
+                                                        </form>
+                                                        <form t-attf-action="/portal/task/#{task.id}" method="post"
+                                                              class="list-group-item list-group-item-action">
+                                                            <input type="hidden" name="csrf_token"
+                                                                   t-att-value="request.csrf_token()"/>
+                                                            <input type="hidden" name="function" value="set_to_draft"/>
+                                                            <button type="submit" class="btn btn-link p-0"
+                                                                    title="Set to Draft">
+                                                                <i class="fa fa-undo me-2"/>
+                                                                Draft
+                                                            </button>
+                                                        </form>
+                                                        <form t-attf-action="/portal/tasks/delete/#{task.id}"
+                                                              method="post"
+                                                              class="list-group-item list-group-item-action">
+                                                            <input type="hidden" name="csrf_token"
+                                                                   t-att-value="request.csrf_token()"/>
+                                                            <input type="hidden" name="deleted" t-att-value="1"/>
+                                                            <button type="submit" class="btn btn-link p-0"
+                                                                    title="Delete Task">
+                                                                <i class="fa fa-trash me-2"/>
+                                                                Delete
+                                                            </button>
+                                                        </form>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </t>
+
+                                <button type="submit" class="btn btn-link p-1" form="edit_task_form"
+                                        title="Save Task">
+                                    <i class="fa fa-save"/>
+                                </button>
+
+                                <!-- Timer Badge - Enhanced size -->
+                                <span id="runningTimerBadge" class="badge bg-primary d-none timer-badge"
+                                      t-att-data-start="active_timer_start or ''" title="Elapsed time">
+                                    00:00:00
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- RIGHT: Status + Subtasks (sejajar dengan timer di mobile) -->
+                        <div class="status-subtasks-container">
+                            <!-- Status Badge -->
+                            <span class="badge bg-info text-white status-badge">
+                                <t t-if="task and task.z_project_task_state == 'new'">New</t>
+                                <t t-elif="task and task.z_project_task_state == 'in_progress'">In Progress</t>
+                                <t t-elif="task and task.z_project_task_state == 'done'">Finished</t>
+                                <t t-elif="task and task.z_project_task_state == 'cancel'">Cancelled</t>
+                                <t t-else="">New</t>
+                            </span>
+
+                            <!-- Subtasks Button -->
+                            <a t-attf-href="/portal/tasks/parent/#{task.id}"
+                               class="btn btn-light d-flex align-items-center subtasks-btn btn-back-to-parent"
+                               t-att-data-parent-id="task.id">
+                                <i class="fa fa-tasks me-1"/>
+                                <span class="d-none d-sm-inline">Subtasks</span>
+                                <span class="d-sm-none">Sub</span>
+                                <span class="badge bg-secondary text-white ms-1">
+                                    <t t-esc="len(subtasks) if subtasks else 0"/>
+                                </span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FIXED: ACTION BUTTONS dengan PAUSE button -->
+                <div class="d-flex mb-4 gap-2 flex-wrap">
+                    <!-- Timer buttons dengan Pause/Resume -->
+                    <button id="btnTimeStart" type="button" class="btn btn-primary action-btn"
+                            t-att-data-task-id="task.id"
+                            t-att-disabled="active_timer_running and not active_timer_paused">
+                        <i class="fa fa-play me-1"/>
+                        <span class="d-none d-sm-inline">
+                            <t t-if="active_timer_paused">Resume</t>
+                            <t t-else="">Time Start</t>
+                        </span>
+                        <span class="d-sm-none">
+                            <t t-if="active_timer_paused">Resume</t>
+                            <t t-else="">Start</t>
+                        </span>
+                    </button>
+
+                    <!-- NEW: Pause Button -->
+                    <button id="btnTimePause" type="button" class="btn btn-warning action-btn"
+                            t-att-data-task-id="task.id"
+                            t-att-disabled="not active_timer_running or active_timer_paused"
+                            t-att-style="'display: ' + ('inline-block' if active_timer_running and not active_timer_paused else 'none')">
+                        <i class="fa fa-pause me-1"/>
+                        <span class="d-none d-sm-inline">Pause</span>
+                        <span class="d-sm-none">Pause</span>
+                    </button>
+
+                    <button id="btnTimeStop" type="button" class="btn btn-danger action-btn"
+                            t-att-data-task-id="task.id"
+                            t-att-disabled="not active_timer_running">
+                        <i class="fa fa-stop me-1"/>
+                        <span class="d-none d-sm-inline">Time Stop</span>
+                        <span class="d-sm-none">Stop</span>
+                    </button>
+
+                    <!-- Finish Button - HANYA MUNCUL SAAT IN_PROGRESS -->
+                    <t t-if="kw.get('mode') == 'edit' and task">
+                        <form t-attf-action="/portal/task/#{task.id}" method="post" class="d-inline-block">
+                            <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                            <input type="hidden" name="function" value="finish_task"/>
+                            <button type="submit" class="btn btn-success action-btn" title="Submit">
+                                <i class="fa fa-check me-1"/>
+                                <span class="d-none d-sm-inline">Submit</span>
+                                <span class="d-sm-none">Submit</span>
+                            </button>
+                        </form>
+                    </t>
+                </div>
+
+                <form id="edit_task_form" t-attf-action="/portal/task/#{task.id}" method="post">
+                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                    <input type="hidden" id="current_task_id" t-att-value="task.id"/>
+
+                    <!-- Form fields -->
+                    <div class="row">
+                        <div class="col-lg-6">
+                            <div class="form-group">
+                                <label>Task Code</label>
+                                <input type="text" class="form-control" name="name"
+                                       t-att-value="task.name if task else ''" readonly="readonly"/>
+                            </div>
+                            <div class="form-group">
+                                <label>Name of Task</label>
+                                <select name="z_master_task_id" class="form-select js-example-basic-single"
+                                        required="required">
+                                    <option value="">Select Master Task...</option>
+                                    <t t-foreach="master_tasks or []" t-as="master_task">
+                                        <option t-att-value="master_task.id"
+                                                t-att-selected="master_task.id == task.z_master_task_id.id if task and task.z_master_task_id else False">
+                                            <t t-esc="master_task.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="col-form-label" for="project_id">Project</label>
+                                <select name="project_id" class="form-select js-example-basic-single"
+                                        readonly="readonly">
+                                    <option value="">select...</option>
+                                    <t t-foreach="request.env['project.project'].sudo().search([])" t-as="project">
+                                        <option t-att-value="project.id"
+                                                t-att-selected="project.id == task.project_id.id if task and task.project_id else False">
+                                            <t t-esc="project.name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_name_of_project">Name of Project</label>
+                                <input type="text" class="form-control" name="z_name_of_project"
+                                       t-att-value="task.z_name_of_project if task else ''" readonly="readonly"/>
+                            </div>
+
+<!--                            <div class="mb-3">-->
+<!--                                <label class="col-form-label" for="customer_id">Customer</label>-->
+<!--                                <input type="text" class="form-control"-->
+<!--                                       t-att-value="task.partner_id.name if task and task.partner_id else ''"-->
+<!--                                       readonly="readonly" placeholder="No customer selected"/>-->
+<!--                                <input type="hidden" name="customer_id"-->
+<!--                                       t-att-value="task.partner_id.id if task and task.partner_id else ''"/>-->
+<!--                            </div>-->
+                            <!-- CORRECTED FIELD NAMES AND EMPLOYEES HANDLING -->
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_head_assignes_ids">Head Assignees</label>
+                                <select name="z_head_assignes_ids" id="z_head_assignes_ids"
+                                        class="form-control select2" multiple="multiple">
+                                    <option value="">Select Employee</option>
+                                    <t t-foreach="employees" t-as="employee">
+                                        <option t-att-value="employee.id">
+                                            <t t-esc="employee.name or 'Unnamed'"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="col-form-label" for="z_member_assignes_ids">Member Assignees</label>
+                                <select name="z_member_assignes_ids" id="z_member_assignes_ids"
+                                        class="form-control select2" multiple="multiple">
+                                    <option value="">Select Employee</option>
+                                    <t t-foreach="employees" t-as="employee">
+                                        <option t-att-value="employee.id">
+                                            <t t-esc="employee.name or 'Unnamed'"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                            <div class="mb-3"
+                                 t-att-style="'display: ' + ('block' if task and task.z_is_maintenance else 'none')">
+                                <label class="col-form-label" for="z_technology_id">Technology</label>
+                                <select name="z_technology_id" class="form-select js-example-basic-single">
+                                    <option value="">select...</option>
+                                    <t t-foreach="technologies or []" t-as="tech">
+                                        <option t-att-value="tech.id"
+                                                t-att-selected="tech.id == task.z_technology_id.id if task and task.z_technology_id else False">
+                                            <t t-esc="tech.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                            <div class="mb-3"
+                                 t-att-style="'display: ' + ('block' if task and task.z_is_maintenance else 'none')">
+                                <label class="col-form-label" for="z_severity_id">Severity</label>
+                                <select name="z_severity_id" class="form-select js-example-basic-single">
+                                    <option value="">select...</option>
+                                    <t t-foreach="severities or []" t-as="severity">
+                                        <option t-att-value="severity.id"
+                                                t-att-selected="severity.id == task.z_severity_id.id if task and task.z_severity_id else False">
+                                            <t t-esc="severity.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                            <div class="mb-3"
+                                 t-att-style="'display: ' + ('block' if task and task.z_is_maintenance else 'none')">
+                                <label class="col-form-label" for="z_regional_id">Regional</label>
+                                <select name="z_regional_id" class="form-select js-example-basic-single">
+                                    <option value="">select...</option>
+                                    <t t-foreach="regionals or []" t-as="regional">
+                                        <option t-att-value="regional.id"
+                                                t-att-selected="regional.id == task.z_regional_id.id if task and task.z_regional_id else False">
+                                            <t t-esc="regional.z_name"/>
+                                        </option>
+                                    </t>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-lg-6">
+                            <div class="row">
+                                <div class="col-6">
+                                    <div class="mb-3">
+                                        <label for="z_planned_start_date" class="form-label">Planned Start Date</label>
+                                        <input type="date" class="form-control" id="z_planned_start_date"
+                                               name="z_planned_start_date"
+                                               t-att-value="task.z_planned_start_date or ''"/>
+                                    </div>
+                                </div>
+                                <div class="col-6">
+                                    <div class="mb-3">
+                                        <label for="z_planned_end_date" class="form-label">Planned End Date</label>
+                                        <input type="date" class="form-control" id="z_planned_end_date"
+                                               name="z_planned_end_date" t-att-value="task.z_planned_end_date or ''"/>
+                                    </div>
+                                </div>
+                            </div>
+<!--                            <div class="row">-->
+<!--                                <div class="col-6">-->
+<!--                                    <div class="mb-3">-->
+<!--                                        <label for="z_actual_start_date" class="form-label">Actual Start Date</label>-->
+<!--                                        <input type="date" class="form-control" id="z_actual_start_date"-->
+<!--                                               name="z_actual_start_date"-->
+<!--                                               t-att-value="task.z_actual_start_date or '' if task else ''"-->
+<!--                                               readonly="readonly"/>-->
+<!--                                    </div>-->
+<!--                                </div>-->
+<!--                                <div class="col-6">-->
+<!--                                    <div class="mb-3">-->
+<!--                                        <label for="z_actual_end_date" class="form-label">Actual End Date</label>-->
+<!--                                        <input type="date" class="form-control" id="z_actual_end_date"-->
+<!--                                               name="z_actual_end_date"-->
+<!--                                               t-att-value="task.z_actual_end_date or '' if task else ''"-->
+<!--                                               readonly="readonly"/>-->
+<!--                                    </div>-->
+<!--                                </div>-->
+<!--                            </div>-->
+<!--                            <div class="mb-3">-->
+<!--                                <label for="z_bobot" class="form-label">Bobot (%)</label>-->
+<!--                                <div class="input-group">-->
+<!--                                    <input type="number" step="0.01" min="0" max="100" class="form-control"-->
+<!--                                           id="z_bobot" name="z_bobot" style="text-align: left !important;"-->
+<!--                                           t-att-value="'{:.2f}'.format(task.z_bobot) if task and task.z_bobot else '0.00'"/>-->
+<!--                                    <span class="input-group-text">%</span>-->
+<!--                                </div>-->
+<!--                            </div>-->
+<!--                            <div class="mb-3">-->
+<!--                                <label for="z_mandays_budget" class="form-label">Budget Mandays</label>-->
+<!--                                <input type="number" step="0.01" class="form-control" id="z_mandays_budget"-->
+<!--                                       name="z_mandays_budget" style="text-align: left !important;"-->
+<!--                                       t-att-value="'{:.2f}'.format(task.z_mandays_budget) if task and task.z_mandays_budget else '0.00'"/>-->
+<!--                            </div>-->
+<!--                            <div class="mb-3">-->
+<!--                                <label for="z_actual_budget_mandays" class="form-label">Actual Mandays</label>-->
+<!--                                <input type="number" step="0.01" class="form-control" id="z_actual_budget_mandays"-->
+<!--                                       name="z_actual_budget_mandays" style="text-align: left !important;"-->
+<!--                                       t-att-value="'{:.2f}'.format(task.z_actual_budget_mandays) if task and task.z_actual_budget_mandays else '0.00'"-->
+<!--                                       readonly="readonly"/>-->
+<!--                            </div>-->
+<!--                            <div class="mb-3">-->
+<!--                                <label for="z_progress_project" class="form-label">Progress (%)</label>-->
+<!--                                <div class="input-group">-->
+<!--                                    <input type="number" step="0.01" min="0" max="100" class="form-control"-->
+<!--                                           id="z_progress_project" name="z_progress_project"-->
+<!--                                           style="text-align: left !important;"-->
+<!--                                           t-att-value="'{:.2f}'.format(task.z_progress_project) if task and task.z_progress_project else '0.00'"-->
+<!--                                           readonly="readonly"/>-->
+<!--                                    <span class="input-group-text">%</span>-->
+<!--                                </div>-->
+<!--                            </div>-->
+<!--                            <div class="mb-3">-->
+<!--                                <label for="z_quality_entry" class="form-label">Quality (%)</label>-->
+<!--                                <div class="input-group">-->
+<!--                                    <input type="number" step="0.01" min="0" max="100" class="form-control"-->
+<!--                                           id="z_quality_entry" name="z_quality_entry"-->
+<!--                                           style="text-align: left !important;"-->
+<!--                                           t-att-value="'{:.2f}'.format(task.z_quality_entry) if task and task.z_quality_entry else '0.00'"/>-->
+<!--                                    <span class="input-group-text">%</span>-->
+<!--                                </div>-->
+<!--                            </div>-->
+                        </div>
+                    </div>
+
+                    <!-- Tabs -->
+                    <ul class="nav nav-tabs" id="myTab" role="tablist">
+<!--                        <li class="nav-item" role="presentation">-->
+<!--                            <button class="nav-link active" id="description-tab" data-bs-toggle="tab"-->
+<!--                                    data-bs-target="#description" type="button" role="tab" aria-controls="description"-->
+<!--                                    aria-selected="true">Description-->
+<!--                            </button>-->
+<!--                        </li>-->
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="timesheet-tab" data-bs-toggle="tab"
+                                    data-bs-target="#timesheets" type="button" role="tab" aria-controls="timesheets"
+                                    aria-selected="false">Timesheets
+                                <span class="badge bg-secondary ms-2">
+                                    <t t-esc="len(timesheets) if timesheets else 0"/>
+                                </span>
+                            </button>
+                        </li>
+                        <!-- ALWAYS show subtasks tab -->
+<!--                        <li class="nav-item" role="presentation">-->
+<!--                            <button class="nav-link" id="subtask-tab" data-bs-toggle="tab" data-bs-target="#subtasks"-->
+<!--                                    type="button" role="tab" aria-controls="subtasks" aria-selected="false">-->
+<!--                                Subtasks-->
+<!--                                <span class="badge bg-secondary ms-2">-->
+<!--                                    <t t-esc="len(subtasks) if subtasks else 0"/>-->
+<!--                                </span>-->
+<!--                            </button>-->
+<!--                        </li>-->
+<!--                        <li class="nav-item" role="presentation">-->
+<!--                            <button class="nav-link" id="invoice-plan-tab" data-bs-toggle="tab"-->
+<!--                                    data-bs-target="#invoice-plan"-->
+<!--                                    type="button" role="tab" aria-controls="invoice-plan" aria-selected="false">-->
+<!--                                Invoice Plan-->
+<!--                                <span class="badge bg-secondary ms-2">-->
+<!--                                    <t t-esc="len(task.z_invoice_plan_ids) if task and task.z_invoice_plan_ids else 0"/>-->
+<!--                                </span>-->
+<!--                            </button>-->
+<!--                        </li>-->
+                    </ul>
+                    <div class="tab-content" id="myTabContent">
+                        <!-- Description Tab -->
+<!--                        <div class="tab-pane fade show active" id="description" role="tabpanel"-->
+<!--                             aria-labelledby="description-tab">-->
+<!--                            <div class="mt-3 mb-3 col-lg-12">-->
+<!--                                <textarea class="form-control" name="description" rows="5"-->
+<!--                                          t-att-value="task_description"></textarea>-->
+<!--                            </div>-->
+<!--                        </div>-->
+
+                        <!-- IMPROVED: Timesheet Tab untuk Mobile -->
+                        <div class="tab-pane fade" id="timesheets" role="tabpanel" aria-labelledby="timesheet-tab">
+                            <div class="mt-3 mb-3">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <h5>Timesheet Entries</h5>
+                                    <button type="button" class="btn btn-primary add-timesheet-btn"
+                                            t-att-data-task-id="task.id">
+                                        <i class="fa fa-plus me-2"></i>
+                                        <span class="d-none d-md-inline">Add Timesheet</span>
+                                        <span class="d-md-none">Add</span>
+                                    </button>
+                                </div>
+
+                                <!-- Desktop View -->
+                                <div class="d-none d-md-block">
+                                    <t t-if="timesheets">
+                                        <div class="table-responsive">
+                                            <table class="table table-striped timesheet-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Start Date</th>
+                                                        <th>End Date</th>
+                                                        <th>Employee</th>
+                                                        <th>Description</th>
+                                                        <th>Time Spent</th>
+                                                        <th>Action</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <t t-foreach="timesheets" t-as="ts">
+                                                        <tr>
+                                                            <td>
+                                                                <t t-if="ts.z_timesheet_start_date">
+                                                                    <span class="timesheet-datetime"
+                                                                          t-att-data-utc="ts.z_timesheet_start_date.strftime('%Y-%m-%d %H:%M:%S')"
+                                                                          t-esc="ts.z_timesheet_start_date.strftime('%m/%d/%Y %H:%M:%S')"/>
+                                                                </t>
+                                                            </td>
+                                                            <td>
+                                                                <t t-if="ts.z_timesheet_end_date">
+                                                                    <span class="timesheet-datetime"
+                                                                          t-att-data-utc="ts.z_timesheet_end_date.strftime('%Y-%m-%d %H:%M:%S')"
+                                                                          t-esc="ts.z_timesheet_end_date.strftime('%m/%d/%Y %H:%M:%S')"/>
+                                                                </t>
+                                                                <t t-elif="not ts.z_timesheet_end_date">
+                                                                    <span class="badge bg-success">
+                                                                        <i class="fa fa-play me-1"></i>RUNNING
+                                                                    </span>
+                                                                </t>
+                                                            </td>
+                                                            <td>
+                                                                <span t-field="ts.employee_id.name"/>
+                                                            </td>
+                                                            <td>
+                                                                <span t-field="ts.name"/>
+                                                            </td>
+                                                            <td>
+                                                                <t t-set="total_minutes"
+                                                                   t-value="int(ts.unit_amount * 60)"/>
+                                                                <t t-set="hours_part" t-value="total_minutes // 60"/>
+                                                                <t t-set="minutes_part" t-value="total_minutes % 60"/>
+                                                                <span t-att-class="'text-danger' if (ts.unit_amount &lt; 0 or ts.unit_amount &gt; 24) else ''">
+                                                                    <t t-if="hours_part == 0 and minutes_part == 0">0m
+                                                                    </t>
+                                                                    <t t-elif="hours_part == 0"><t
+                                                                            t-esc="minutes_part"/>m
+                                                                    </t>
+                                                                    <t t-elif="minutes_part == 0"><t
+                                                                            t-esc="hours_part"/>h
+                                                                    </t>
+                                                                    <t t-else=""><t t-esc="hours_part"/>h<t
+                                                                            t-esc="minutes_part"/>m
+                                                                    </t>
+                                                                    <small class="text-muted d-block">(<t
+                                                                            t-esc="round(ts.unit_amount, 2)"/>h)
+                                                                    </small>
+                                                                </span>
+                                                            </td>
+                                                            <td>
+                                                                <button type="button"
+                                                                        class="btn btn-sm btn-outline-primary edit-timesheet-btn"
+                                                                        t-att-data-task-id="task.id"
+                                                                        t-att-data-timesheet-id="ts.id">
+                                                                    <i class="fa fa-edit"></i>
+                                                                </button>
+                                                                <form t-attf-action="/portal/task/#{task.id}/timesheet/delete/#{ts.id}"
+                                                                      method="post" class="d-inline-block">
+                                                                    <input type="hidden" name="csrf_token"
+                                                                           t-att-value="request.csrf_token()"/>
+                                                                    <button type="submit"
+                                                                            class="btn btn-sm btn-outline-danger delete-timesheet-btn"
+                                                                            onclick="return confirm('Are you sure?')">
+                                                                        <i class="fa fa-trash"></i>
+                                                                    </button>
+                                                                </form>
+                                                            </td>
+                                                        </tr>
+                                                    </t>
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </t>
+                                    <t t-if="not timesheets">
+                                        <div class="alert alert-warning" role="alert">
+                                            There are no timesheet entries for this task.
+                                        </div>
+                                    </t>
+                                </div>
+
+                                <!-- IMPROVED: Mobile View - Card Layout -->
+                                <div class="d-md-none">
+                                    <t t-if="timesheets">
+                                        <div class="row g-3">
+                                            <t t-foreach="timesheets" t-as="ts">
+                                                <div class="col-12">
+                                                    <div class="card shadow-sm">
+                                                        <div class="card-body p-3">
+                                                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                                                <h6 class="card-title mb-0">
+                                                                    <span t-field="ts.employee_id.name"/>
+                                                                </h6>
+                                                                <div class="dropdown">
+                                                                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"
+                                                                            type="button" data-bs-toggle="dropdown">
+                                                                        <i class="fa fa-ellipsis-v"></i>
+                                                                    </button>
+                                                                    <ul class="dropdown-menu">
+                                                                        <li>
+                                                                            <button class="dropdown-item edit-timesheet-btn"
+                                                                                    type="button"
+                                                                                    t-att-data-task-id="task.id"
+                                                                                    t-att-data-timesheet-id="ts.id">
+                                                                                <i class="fa fa-edit me-2"></i>Edit
+                                                                            </button>
+                                                                        </li>
+                                                                        <li>
+                                                                            <form t-attf-action="/portal/task/#{task.id}/timesheet/delete/#{ts.id}"
+                                                                                  method="post" class="m-0">
+                                                                                <input type="hidden" name="csrf_token"
+                                                                                       t-att-value="request.csrf_token()"/>
+                                                                                <button type="submit"
+                                                                                        class="dropdown-item text-danger delete-timesheet-btn"
+                                                                                        onclick="return confirm('Are you sure?')">
+                                                                                    <i class="fa fa-trash me-2"></i>
+                                                                                    Delete
+                                                                                </button>
+                                                                            </form>
+                                                                        </li>
+                                                                    </ul>
+                                                                </div>
+                                                            </div>
+
+                                                            <div class="row g-2 text-sm">
+                                                                <div class="col-6">
+                                                                    <strong>Start:</strong>
+                                                                    <br/>
+                                                                    <t t-if="ts.z_timesheet_start_date">
+                                                                        <span class="timesheet-datetime"
+                                                                              t-att-data-utc="ts.z_timesheet_start_date.strftime('%Y-%m-%d %H:%M:%S')"
+                                                                              t-esc="ts.z_timesheet_start_date.strftime('%m/%d %H:%M')"/>
+                                                                    </t>
+                                                                </div>
+                                                                <div class="col-6">
+                                                                    <strong>End:</strong>
+                                                                    <br/>
+                                                                    <t t-if="ts.z_timesheet_end_date">
+                                                                        <span class="timesheet-datetime"
+                                                                              t-att-data-utc="ts.z_timesheet_end_date.strftime('%Y-%m-%d %H:%M:%S')"
+                                                                              t-esc="ts.z_timesheet_end_date.strftime('%m/%d %H:%M')"/>
+                                                                    </t>
+                                                                    <t t-else="">
+                                                                        <span class="text-muted">Running...</span>
+                                                                    </t>
+                                                                </div>
+                                                            </div>
+
+                                                            <div class="mt-2">
+                                                                <strong>Duration:</strong>
+                                                                <t t-set="total_minutes"
+                                                                   t-value="int(ts.unit_amount * 60)"/>
+                                                                <t t-set="hours_part" t-value="total_minutes // 60"/>
+                                                                <t t-set="minutes_part" t-value="total_minutes % 60"/>
+                                                                <span class="badge bg-primary">
+                                                                    <t t-if="hours_part == 0 and minutes_part == 0">0m
+                                                                    </t>
+                                                                    <t t-elif="hours_part == 0"><t
+                                                                            t-esc="minutes_part"/>m
+                                                                    </t>
+                                                                    <t t-elif="minutes_part == 0"><t
+                                                                            t-esc="hours_part"/>h
+                                                                    </t>
+                                                                    <t t-else=""><t t-esc="hours_part"/>h<t
+                                                                            t-esc="minutes_part"/>m
+                                                                    </t>
+                                                                </span>
+                                                            </div>
+
+                                                            <t t-if="ts.name">
+                                                                <div class="mt-2">
+                                                                    <strong>Description:</strong>
+                                                                    <br/>
+                                                                    <span t-field="ts.name" class="text-muted"/>
+                                                                </div>
+                                                            </t>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </t>
+                                        </div>
+                                    </t>
+                                    <t t-if="not timesheets">
+                                        <div class="alert alert-warning" role="alert">
+                                            <i class="fa fa-info-circle me-2"></i>
+                                            No timesheet entries yet.
+                                        </div>
+                                    </t>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- IMPROVED: Subtask Tab - Always visible -->
+<!--                        <div class="tab-pane fade" id="subtasks" role="tabpanel" aria-labelledby="subtask-tab">-->
+<!--                            <div class="mt-3 mb-3">-->
+<!--                                <div class="d-flex justify-content-between align-items-center mb-3">-->
+<!--                                    <h5>Subtask Entries</h5>-->
+<!--                                    <button type="button" class="btn btn-primary add-subtask-btn"-->
+<!--                                            t-att-data-task-id="task.id">-->
+<!--                                        <i class="fa fa-plus me-2"></i>-->
+<!--                                        <span class="d-none d-md-inline">Add Subtask</span>-->
+<!--                                        <span class="d-md-none">Add</span>-->
+<!--                                    </button>-->
+<!--                                </div>-->
+
+<!--                                &lt;!&ndash; Desktop View &ndash;&gt;-->
+<!--                                <div class="d-none d-md-block">-->
+<!--                                    <t t-if="subtasks">-->
+<!--                                        <div class="table-responsive">-->
+<!--                                            <table class="table table-striped">-->
+<!--                                                <thead>-->
+<!--                                                    <tr>-->
+<!--                                                        <th>Name</th>-->
+<!--                                                        <th>Master Subtask</th>-->
+<!--                                                        <th>Head Assignees</th>-->
+<!--                                                        <th>Member Assignees</th>-->
+<!--                                                        <th>Status</th>-->
+<!--                                                        <th>Action</th>-->
+<!--                                                    </tr>-->
+<!--                                                </thead>-->
+<!--                                                <tbody>-->
+<!--                                                    <t t-foreach="subtasks" t-as="st">-->
+<!--                                                        <tr>-->
+<!--                                                            <td>-->
+<!--                                                                <span t-esc="st.name"/>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <span t-esc="st.z_master_task_id.z_name if st.z_master_task_id else ''"/>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <t t-foreach="st.z_head_assignes_ids" t-as="head">-->
+<!--                                                                    <span class="badge bg-info me-1">-->
+<!--                                                                        <t t-esc="head.name"/>-->
+<!--                                                                    </span>-->
+<!--                                                                </t>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <t t-foreach="st.z_member_assignes_ids" t-as="m">-->
+<!--                                                                    <span class="badge bg-secondary me-1">-->
+<!--                                                                        <t t-esc="m.name"/>-->
+<!--                                                                    </span>-->
+<!--                                                                </t>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <t t-set="status_dict"-->
+<!--                                                                   t-value="dict(st._fields['z_project_task_state'].selection)"/>-->
+<!--                                                                <span class="badge"-->
+<!--                                                                      t-att-class="st.z_project_task_state == 'done' and 'bg-success' or (st.z_project_task_state == 'in_progress' and 'bg-primary') or (st.z_project_task_state == 'cancel' and 'bg-danger') or 'bg-light text-dark'">-->
+<!--                                                                    <t t-esc="status_dict.get(st.z_project_task_state)"/>-->
+<!--                                                                </span>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <button type="button"-->
+<!--                                                                        class="btn btn-sm btn-outline-primary edit-subtask-btn"-->
+<!--                                                                        t-att-data-task-id="task.id"-->
+<!--                                                                        t-att-data-subtask-id="st.id">-->
+<!--                                                                    <i class="fa fa-edit"></i>-->
+<!--                                                                </button>-->
+<!--                                                                <form t-attf-action="/portal/task/#{task.id}/subtask/delete/#{st.id}"-->
+<!--                                                                      method="post" class="d-inline-block">-->
+<!--                                                                    <input type="hidden" name="csrf_token"-->
+<!--                                                                           t-att-value="request.csrf_token()"/>-->
+<!--                                                                    <button type="submit"-->
+<!--                                                                            class="btn btn-sm btn-outline-danger delete-subtask-btn"-->
+<!--                                                                            onclick="return confirm('Are you sure?')">-->
+<!--                                                                        <i class="fa fa-trash"></i>-->
+<!--                                                                    </button>-->
+<!--                                                                </form>-->
+<!--                                                            </td>-->
+<!--                                                        </tr>-->
+<!--                                                    </t>-->
+<!--                                                </tbody>-->
+<!--                                            </table>-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                    <t t-if="not subtasks">-->
+<!--                                        <div class="alert alert-info" role="alert">-->
+<!--                                            <i class="fa fa-tasks me-2"></i>-->
+<!--                                            No subtasks created yet.-->
+<!--                                            <br/>-->
+<!--                                            <small>Click "Add Subtask" to break down this task into smaller parts.-->
+<!--                                            </small>-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                </div>-->
+
+<!--                                &lt;!&ndash; IMPROVED: Mobile View for Subtasks &ndash;&gt;-->
+<!--                                <div class="d-md-none">-->
+<!--                                    <t t-if="subtasks">-->
+<!--                                        <div class="row g-3">-->
+<!--                                            <t t-foreach="subtasks" t-as="st">-->
+<!--                                                <div class="col-12">-->
+<!--                                                    <div class="card shadow-sm">-->
+<!--                                                        <div class="card-body p-3">-->
+<!--                                                            <div class="d-flex justify-content-between align-items-start mb-2">-->
+<!--                                                                <h6 class="card-title mb-0">-->
+<!--                                                                    <span t-esc="st.name"/>-->
+<!--                                                                </h6>-->
+<!--                                                                <div class="dropdown">-->
+<!--                                                                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle"-->
+<!--                                                                            type="button" data-bs-toggle="dropdown">-->
+<!--                                                                        <i class="fa fa-ellipsis-v"></i>-->
+<!--                                                                    </button>-->
+<!--                                                                    <ul class="dropdown-menu">-->
+<!--                                                                        <li>-->
+<!--                                                                            <button class="dropdown-item edit-subtask-btn"-->
+<!--                                                                                    type="button"-->
+<!--                                                                                    t-att-data-task-id="task.id"-->
+<!--                                                                                    t-att-data-subtask-id="st.id">-->
+<!--                                                                                <i class="fa fa-edit me-2"></i>Edit-->
+<!--                                                                            </button>-->
+<!--                                                                        </li>-->
+<!--                                                                        <li>-->
+<!--                                                                            <form t-attf-action="/portal/task/#{task.id}/subtask/delete/#{st.id}"-->
+<!--                                                                                  method="post" class="m-0">-->
+<!--                                                                                <input type="hidden" name="csrf_token"-->
+<!--                                                                                       t-att-value="request.csrf_token()"/>-->
+<!--                                                                                <button type="submit"-->
+<!--                                                                                        class="dropdown-item text-danger delete-subtask-btn"-->
+<!--                                                                                        onclick="return confirm('Are you sure?')">-->
+<!--                                                                                    <i class="fa fa-trash me-2"></i>-->
+<!--                                                                                    Delete-->
+<!--                                                                                </button>-->
+<!--                                                                            </form>-->
+<!--                                                                        </li>-->
+<!--                                                                    </ul>-->
+<!--                                                                </div>-->
+<!--                                                            </div>-->
+
+<!--                                                            <div class="mb-2">-->
+<!--                                                                <t t-set="status_dict"-->
+<!--                                                                   t-value="dict(st._fields['z_project_task_state'].selection)"/>-->
+<!--                                                                <span class="badge me-2"-->
+<!--                                                                      t-att-class="st.z_project_task_state == 'done' and 'bg-success' or (st.z_project_task_state == 'in_progress' and 'bg-primary') or (st.z_project_task_state == 'cancel' and 'bg-danger') or 'bg-light text-dark'">-->
+<!--                                                                    <t t-esc="status_dict.get(st.z_project_task_state)"/>-->
+<!--                                                                </span>-->
+<!--                                                            </div>-->
+
+<!--                                                            <t t-if="st.z_master_task_id">-->
+<!--                                                                <div class="mb-2">-->
+<!--                                                                    <strong>Master Task:</strong>-->
+<!--                                                                    <br/>-->
+<!--                                                                    <span t-esc="st.z_master_task_id.z_name"-->
+<!--                                                                          class="text-muted"/>-->
+<!--                                                                </div>-->
+<!--                                                            </t>-->
+
+<!--                                                            <t t-if="st.z_head_assignes_ids">-->
+<!--                                                                <div class="mb-2">-->
+<!--                                                                    <strong>Head Assignees:</strong>-->
+<!--                                                                    <br/>-->
+<!--                                                                    <t t-foreach="st.z_head_assignes_ids" t-as="head">-->
+<!--                                                                        <span class="badge bg-info me-1">-->
+<!--                                                                            <t t-esc="head.name"/>-->
+<!--                                                                        </span>-->
+<!--                                                                    </t>-->
+<!--                                                                </div>-->
+<!--                                                            </t>-->
+
+<!--                                                            <t t-if="st.z_member_assignes_ids">-->
+<!--                                                                <div class="mb-2">-->
+<!--                                                                    <strong>Members:</strong>-->
+<!--                                                                    <br/>-->
+<!--                                                                    <t t-foreach="st.z_member_assignes_ids" t-as="m">-->
+<!--                                                                        <span class="badge bg-secondary me-1">-->
+<!--                                                                            <t t-esc="m.name"/>-->
+<!--                                                                        </span>-->
+<!--                                                                    </t>-->
+<!--                                                                </div>-->
+<!--                                                            </t>-->
+<!--                                                        </div>-->
+<!--                                                    </div>-->
+<!--                                                </div>-->
+<!--                                            </t>-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                    <t t-if="not subtasks">-->
+<!--                                        <div class="alert alert-info" role="alert">-->
+<!--                                            <i class="fa fa-tasks me-2"></i>-->
+<!--                                            No subtasks yet.-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                </div>-->
+<!--                            </div>-->
+<!--                        </div>-->
+
+<!--                        <div class="tab-pane fade" id="invoice-plan" role="tabpanel" aria-labelledby="invoice-plan-tab">-->
+<!--                            <div class="mt-3 mb-3">-->
+<!--                                <div class="d-flex justify-content-between align-items-center mb-3">-->
+<!--                                    <h5>Invoice Plan</h5>-->
+<!--                                    <button type="button" class="btn btn-primary add-invoice-plan-btn"-->
+<!--                                            t-att-data-task-id="task.id if task else 0">-->
+<!--                                        <i class="fa fa-plus me-2"></i>-->
+<!--                                        <span class="d-none d-md-inline">Add Invoice Plan</span>-->
+<!--                                        <span class="d-md-none">Add</span>-->
+<!--                                    </button>-->
+<!--                                </div>-->
+
+<!--                                &lt;!&ndash; Desktop View &ndash;&gt;-->
+<!--                                <div class="d-none d-md-block">-->
+<!--                                    <t t-if="task and task.z_invoice_plan_ids">-->
+<!--                                        <div class="table-responsive">-->
+<!--                                            <table class="table table-striped">-->
+<!--                                                <thead>-->
+<!--                                                    <tr>-->
+<!--                                                        <th>Invoice No.</th>-->
+<!--                                                        <th>Description</th>-->
+<!--                                                        <th>Invoice Date</th>-->
+<!--                                                        <th>Amount</th>-->
+<!--                                                        <th>Status</th>-->
+<!--                                                        <th>Action</th>-->
+<!--                                                    </tr>-->
+<!--                                                </thead>-->
+<!--                                                <tbody>-->
+<!--                                                    <t t-foreach="task.z_invoice_plan_ids" t-as="invoice">-->
+<!--                                                        <tr>-->
+<!--                                                            <td>-->
+<!--                                                                <t t-esc="invoice.z_number_of_invoice"/>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <t t-esc="invoice.z_name"/>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <t t-esc="invoice.z_invoice_date.strftime('%d/%m/%Y') if invoice.z_invoice_date else ''"/>-->
+<!--                                                            </td>-->
+<!--                                                            <td>Rp-->
+<!--                                                                <t t-esc="'{:,.2f}'.format(invoice.z_amount_total)"/>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <span t-att-class="'badge ' + ('bg-success' if invoice.z_state == 'paid' else 'bg-warning' if invoice.z_state == 'sent' else 'bg-secondary')">-->
+<!--                                                                    <t t-esc="invoice.z_state.title()"/>-->
+<!--                                                                </span>-->
+<!--                                                            </td>-->
+<!--                                                            <td>-->
+<!--                                                                <button type="button"-->
+<!--                                                                        class="btn btn-sm btn-outline-primary edit-invoice-plan-btn"-->
+<!--                                                                        t-att-data-task-id="task.id"-->
+<!--                                                                        t-att-data-invoice-id="invoice.id">-->
+<!--                                                                    <i class="fa fa-edit"></i>-->
+<!--                                                                </button>-->
+<!--                                                                <form t-attf-action="/portal/task/#{task.id}/invoice-plan/delete/#{invoice.id}"-->
+<!--                                                                      method="post" class="d-inline-block">-->
+<!--                                                                    <input type="hidden" name="csrf_token"-->
+<!--                                                                           t-att-value="request.csrf_token()"/>-->
+<!--                                                                    <button type="submit"-->
+<!--                                                                            class="btn btn-sm btn-outline-danger delete-invoice-plan-btn"-->
+<!--                                                                            onclick="return confirm('Are you sure?')">-->
+<!--                                                                        <i class="fa fa-trash"></i>-->
+<!--                                                                    </button>-->
+<!--                                                                </form>-->
+<!--                                                            </td>-->
+<!--                                                        </tr>-->
+<!--                                                    </t>-->
+<!--                                                </tbody>-->
+<!--                                            </table>-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                    <t t-if="not task or not task.z_invoice_plan_ids">-->
+<!--                                        <div class="alert alert-info" role="alert">-->
+<!--                                            <i class="fa fa-file-text-o me-2"></i>-->
+<!--                                            No invoice plans created yet.-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                </div>-->
+
+<!--                                &lt;!&ndash; Mobile View &ndash;&gt;-->
+<!--                                <div class="d-md-none">-->
+<!--                                    <t t-if="task and task.z_invoice_plan_ids">-->
+<!--                                        <div class="row g-3">-->
+<!--                                            <t t-foreach="task.z_invoice_plan_ids" t-as="invoice">-->
+<!--                                                <div class="col-12">-->
+<!--                                                    <div class="card shadow-sm">-->
+<!--                                                        <div class="card-body p-3">-->
+<!--                                                            <div class="d-flex justify-content-between align-items-start mb-2">-->
+<!--                                                                <h6 class="card-title mb-0">-->
+<!--                                                                    <t t-esc="invoice.z_number_of_invoice"/>-->
+<!--                                                                </h6>-->
+<!--                                                                <span t-att-class="'badge ' + ('bg-success' if invoice.z_state == 'paid' else 'bg-warning' if invoice.z_state == 'sent' else 'bg-secondary')">-->
+<!--                                                                    <t t-esc="invoice.z_state.title()"/>-->
+<!--                                                                </span>-->
+<!--                                                            </div>-->
+<!--                                                            <p class="text-muted mb-2">-->
+<!--                                                                <t t-esc="invoice.z_name"/>-->
+<!--                                                            </p>-->
+<!--                                                            <div class="row text-sm">-->
+<!--                                                                <div class="col-6">-->
+<!--                                                                    <strong>Date:</strong>-->
+<!--                                                                    <t t-esc="invoice.z_invoice_date.strftime('%d/%m/%Y') if invoice.z_invoice_date else ''"/>-->
+<!--                                                                </div>-->
+<!--                                                                <div class="col-6">-->
+<!--                                                                    <strong>Amount:</strong>-->
+<!--                                                                    Rp-->
+<!--                                                                    <t t-esc="'{:,.2f}'.format(invoice.z_amount_total)"/>-->
+<!--                                                                </div>-->
+<!--                                                            </div>-->
+<!--                                                            <div class="mt-2">-->
+<!--                                                                <button type="button"-->
+<!--                                                                        class="btn btn-sm btn-outline-primary edit-invoice-plan-btn me-2"-->
+<!--                                                                        t-att-data-task-id="task.id"-->
+<!--                                                                        t-att-data-invoice-id="invoice.id">-->
+<!--                                                                    <i class="fa fa-edit"></i>-->
+<!--                                                                    Edit-->
+<!--                                                                </button>-->
+<!--                                                                <button type="button"-->
+<!--                                                                        class="btn btn-sm btn-outline-danger delete-invoice-plan-btn"-->
+<!--                                                                        onclick="return confirm('Are you sure?')">-->
+<!--                                                                    <i class="fa fa-trash"></i>-->
+<!--                                                                    Delete-->
+<!--                                                                </button>-->
+<!--                                                            </div>-->
+<!--                                                        </div>-->
+<!--                                                    </div>-->
+<!--                                                </div>-->
+<!--                                            </t>-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                    <t t-if="not task or not task.z_invoice_plan_ids">-->
+<!--                                        <div class="alert alert-info" role="alert">-->
+<!--                                            <i class="fa fa-file-text-o me-2"></i>-->
+<!--                                            No invoice plans yet.-->
+<!--                                        </div>-->
+<!--                                    </t>-->
+<!--                                </div>-->
+<!--                            </div>-->
+<!--                        </div>-->
+                    </div>
+                    <hr/>
+                    <div id="task_chatter" data-anchor="true"
+                         style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 2px solid #e9ecef;">
+                        <h3>Communication history</h3>
+                        <t t-if="task">
+                            <t t-set="object" t-value="task"/>
+                            <t t-set="token" t-value="task.access_token"/>
+                            <t t-call="portal.message_thread"/>
+                        </t>
+                    </div>
+                </form>
+            </t>
+
+            <!-- Mode List Task -->
+            <t t-if="not kw.get('mode') and not task">
+                <div class="o_portal_tasks_header row mb-4 d-flex align-items-center">
+                    <div class="col-12 d-flex align-items-center">
+                        <!-- FIXED: New button dengan parent context -->
+                        <t t-if="parent_id">
+                            <a t-attf-href="/portal/tasks?mode=new&amp;parent_id=#{parent_id}"
+                               class="btn btn-primary d-flex align-items-center me-2">
+                                <i class="fa fa-plus me-1"/>
+                                New Subtask
+                            </a>
+                        </t>
+                        <t t-else="">
+                            <a t-attf-href="/portal/tasks?mode=new#{('&amp;project_id=' + str(project_id)) if project_id else ''}"
+                               class="btn btn-primary d-flex align-items-center me-2">
+                                <i class="fa fa-plus me-1"/>
+                                New Task
+                            </a>
+                        </t>
+                        <!-- Back button jika di subtasks -->
+                        <t t-if="parent_id and parent_task">
+                            <a t-attf-href="/portal/task/#{parent_task.id}?mode=edit"
+                               class="btn btn-secondary d-flex align-items-center me-2">
+                                <i class="fa fa-chevron-left me-1"/>
+                                Back to Parent
+                            </a>
+                        </t>
+                        <t t-elif="project_id and project">
+                            <a t-attf-href="/portal/projects/#{project.id}?view_type=form"
+                               class="btn btn-secondary d-flex align-items-center me-2">
+                                <i class="fa fa-chevron-left me-1"/>
+                                Back to Project
+                            </a>
+                        </t>
+
+                        <div class="d-flex align-items-center">
+                            <h3 class="mb-0 me-2">
+                                <t t-esc="page_name"/>
+                            </h3>
+                            <button type="button" class="btn btn-link p-0 text-decoration-none" data-bs-toggle="modal"
+                                    data-bs-target="#settingModal" title="Settings">
+                                <i class="fa fa-cog"/>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Search Controls tetap sama seperti sebelumnya -->
+                <div class="o_portal_tasks_search_controls row align-items-center mb-4">
+                    <div class="col-lg-4 col-md-12 d-flex mb-2 mb-lg-0">
+                        <form t-att-action="'/portal/tasks' + ('/parent/' + str(parent_id) if parent_id else '')"
+                              method="get" class="d-flex w-100">
+                            <input type="hidden" name="sortby" t-att-value="sortby or ''"/>
+                            <input type="hidden" name="groupby" t-att-value="groupby or ''"/>
+                            <input type="hidden" name="parent_id" t-att-value="parent_id or ''"/>
+                            <div class="input-group">
+                                <input type="text" name="search" class="form-control" t-att-value="search or ''"
+                                       placeholder="Search tasks..."/>
+                                <button class="btn btn-primary" type="submit">
+                                    <i class="fa fa-search"/>
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="col-lg-8 col-md-12 d-flex flex-wrap justify-content-start justify-content-lg-end align-items-center">
+                        <div class="dropdown me-2 mb-2 mb-lg-0">
+                            <a class="btn btn-primary dropdown-toggle" href="#" role="button"
+                               id="dropdownSortingGrouping" data-bs-toggle="dropdown" aria-haspopup="true"
+                               aria-expanded="false">
+                                <span>Options</span>
+                            </a>
+                            <ul class="dropdown-menu" aria-labelledby="dropdownSortingGrouping">
+                                <li class="dropdown-header">Sort By</li>
+                                <li t-foreach="searchbar_sortings" t-as="sort_key">
+                                    <t t-set="sort_href"
+                                       t-value="'/portal/tasks?sortby=' + (sort_key or '') + '&amp;search=' + (search or '') + '&amp;groupby=' + (groupby or '') + (('&amp;parent_id=' + str(parent_id)) if parent_id else '')"/>
+                                    <a role="menuitem"
+                                       t-attf-class="dropdown-item #{'active' if sort_key == sortby else ''}"
+                                       t-att-href="sort_href">
+                                        <span t-out="searchbar_sortings[sort_key]['label']"/>
+                                    </a>
+                                </li>
+                                <li>
+                                    <hr class="dropdown-divider"/>
+                                </li>
+                                <li class="dropdown-header">Group By</li>
+                                <li t-foreach="searchbar_groupings" t-as="group_key">
+                                    <t t-set="group_href"
+                                       t-value="'/portal/tasks?sortby=' + (sortby or '') + '&amp;search=' + (search or '') + '&amp;groupby=' + (group_key or '') + (('&amp;parent_id=' + str(parent_id)) if parent_id else '')"/>
+                                    <a role="menuitem"
+                                       t-attf-class="dropdown-item #{'active' if group_key == groupby else ''}"
+                                       t-att-href="group_href">
+                                        <span t-out="searchbar_groupings[group_key]['label']"/>
+                                    </a>
+                                </li>
+                            </ul>
+                        </div>
+                        <div class="d-flex flex-grow-1 justify-content-end">
+                            <!-- FIXED: Simple pagination without pager dependency -->
+                            <t t-if="pager_header and pager_header.get('total', 0) > 0">
+                                <div class="d-flex align-items-center">
+                                    <small class="text-muted me-3">
+                                        Total:
+                                        <t t-esc="pager_header.get('total', 0)"/>
+                                        items
+                                    </small>
+                                    <div class="btn-group" role="group">
+                                        <t t-if="page > 1">
+                                            <a t-attf-href="/portal/tasks#{('/parent/' + str(parent_id)) if parent_id else ''}?page=#{page - 1}&amp;search=#{search or ''}&amp;sortby=#{sortby or ''}&amp;groupby=#{groupby or ''}#{('&amp;parent_id=' + str(parent_id)) if parent_id else ''}"
+                                               class="btn btn-outline-primary btn-sm">
+                                                <i class="fa fa-chevron-left"></i>
+                                            </a>
+                                        </t>
+                                        <button class="btn btn-primary btn-sm" disabled="disabled">
+                                            Page
+                                            <t t-esc="page"/>
+                                        </button>
+                                        <t t-if="len(tasks) >= 20">
+                                            <a t-attf-href="/portal/tasks#{('/parent/' + str(parent_id)) if parent_id else ''}?page=#{page + 1}&amp;search=#{search or ''}&amp;sortby=#{sortby or ''}&amp;groupby=#{groupby or ''}#{('&amp;parent_id=' + str(parent_id)) if parent_id else ''}"
+                                               class="btn btn-outline-primary btn-sm">
+                                                <i class="fa fa-chevron-right"></i>
+                                            </a>
+                                        </t>
+                                    </div>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+                </div>
+
+                <hr/>
+                <t t-if="tasks">
+                    <div class="table-responsive">
+                        <t t-call="portal.portal_table">
+                            <table class="table table-striped"
+                                   style="table-layout: fixed;margin-top: -10px !important;">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 150px;">Task Code</th>
+                                        <th style="width: 150px;">Name of Task</th>
+                                        <th style="width: 100px;">Project</th>
+                                        <th style="width: 100px;">Customer</th>
+                                        <th style="width: 100px;">Status</th>
+                                        <th style="width: 150px;">Head Assignees</th>
+                                        <th style="width: 150px;">Member Assignees</th>
+                                        <th style="width: 100px;">Technology</th>
+                                        <th style="width: 100px;">Severity</th>
+                                        <th style="width: 100px;">Planned Dates</th>
+                                        <th style="width: 100px;">Bobot</th>
+                                        <th style="width: 100px;">Progress (%)</th>
+                                        <th style="width: 50px;text-align: center;"/>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-if="groupby">
+                                        <t t-set="group_index" t-value="0"/>
+                                        <t t-foreach="tasks" t-as="group_data">
+                                            <tr class="table-borderless"
+                                                style="background-color: white; border-bottom: 2px solid #d1d9df;">
+                                                <td colspan="13">
+                                                    <!-- FIXED: Improved group header display -->
+                                                    <t t-set="group_name"
+                                                       t-value="group_data.get('group_value_name', 'Undefined')"/>
+                                                    <t t-set="group_id"
+                                                       t-value="group_data.get('group_value_id', 'undefined')"/>
+                                                    <t t-set="collapse_target"
+                                                       t-value="'group_' + str(group_id) + '_' + str(group_index)"/>
+
+                                                    <button class="btn btn-link p-0 group-header" type="button"
+                                                            t-attf-data-bs-target="#collapse_#{collapse_target}"
+                                                            data-bs-toggle="collapse" aria-expanded="false">
+                                                        <i class="fa fa-caret-right me-2"></i>
+                                                        <strong>
+                                                            <t t-esc="group_name"/>
+                                                            (<t t-esc="len(group_data.get('tasks', []))"/>)
+                                                        </strong>
+                                                    </button>
+                                                </td>
+                                            </tr>
+
+                                            <!-- Display tasks in group -->
+                                            <t t-foreach="group_data.get('tasks', [])" t-as="task">
+                                                <tr t-attf-class="collapse"
+                                                    t-attf-id="collapse_#{collapse_target}"
+                                                    style="cursor: pointer;"
+                                                    t-attf-onclick="window.location.href='/portal/task/#{task.id}?mode=edit'">
+                                                    <td>
+                                                        <!-- FIXED: Indentasi untuk hierarchical display -->
+                                                        <t t-if="task.parent_id">
+                                                            <span style="margin-left: 20px; color: #6c757d;">↳</span>
+                                                        </t>
+                                                        <span t-field="task.name" class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_master_task_id.z_name"
+                                                              class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.project_id.name" class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.partner_id.name" class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <!-- FIXED: Status label yang user-friendly -->
+                                                        <t t-if="task.z_project_task_state == 'new'">New</t>
+                                                        <t t-elif="task.z_project_task_state == 'in_progress'">In
+                                                            Progress
+                                                        </t>
+                                                        <t t-elif="task.z_project_task_state == 'done'">Finished</t>
+                                                        <t t-elif="task.z_project_task_state == 'cancel'">Cancelled</t>
+                                                        <t t-else="">
+                                                            <t t-esc="task.z_project_task_state"/>
+                                                        </t>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_head_assignes_ids" class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_member_assignes_ids"
+                                                              class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_technology_id.z_name"
+                                                              class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_severity_id.z_name"
+                                                              class="limit-2-lines"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_planned_start_date"/>
+                                                        <t t-if="task.z_planned_start_date and task.z_planned_end_date">
+                                                            →
+                                                        </t>
+                                                        <span t-field="task.z_planned_end_date"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_bobot"/>
+                                                    </td>
+                                                    <td>
+                                                        <span t-field="task.z_progress_project"/>
+                                                    </td>
+                                                    <td class="text-center" style="cursor: default;"
+                                                        onclick="event.stopPropagation();">
+                                                        <form t-attf-action="/portal/tasks/delete/#{task.id}"
+                                                              method="post" class="d-inline-block">
+                                                            <input type="hidden" name="csrf_token"
+                                                                   t-att-value="request.csrf_token()"/>
+                                                            <input type="hidden" name="deleted" t-att-value="1"/>
+                                                            <button type="submit" class="btn btn-link p-0"
+                                                                    title="Delete Task"
+                                                                    onclick="return confirm('Are you sure you want to delete this task?')">
+                                                                <i class="fa fa-trash text-danger"/>
+                                                            </button>
+                                                        </form>
+                                                    </td>
+                                                </tr>
+                                            </t>
+                                            <t t-set="group_index" t-value="group_index + 1"/>
+                                        </t>
+                                    </t>
+                                    <t t-if="not groupby">
+                                        <!-- Flat view tetap sama seperti sebelumnya -->
+                                        <t t-foreach="tasks" t-as="task">
+                                            <tr style="cursor: pointer;"
+                                                t-attf-onclick="window.location.href='/portal/task/#{task.id}?mode=edit'">
+                                                <td>
+                                                    <span t-field="task.name" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_master_task_id.z_name" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.project_id.name" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.partner_id.name" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_project_task_state" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_head_assignes_ids" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_member_assignes_ids" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_technology_id.z_name" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_severity_id.z_name" class="limit-2-lines"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_planned_start_date"/>
+                                                    <t t-if="task.z_planned_start_date and task.z_planned_end_date">
+                                                        &#8594;
+                                                    </t>
+                                                    <span t-field="task.z_planned_end_date"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_bobot"/>
+                                                </td>
+                                                <td>
+                                                    <span t-field="task.z_progress_project"/>
+                                                </td>
+                                                <td class="text-center" style="cursor: default;"
+                                                    onclick="event.stopPropagation();">
+                                                    <form t-attf-action="/portal/tasks/delete/#{task.id}" method="post"
+                                                          class="d-inline-block">
+                                                        <input type="hidden" name="csrf_token"
+                                                               t-att-value="request.csrf_token()"/>
+                                                        <input type="hidden" name="deleted" t-att-value="1"/>
+                                                        <button type="submit" class="btn btn-link p-0"
+                                                                title="Delete Task"
+                                                                onclick="return confirm('Are you sure you want to delete this task?')">
+                                                            <i class="fa fa-trash text-danger"/>
+                                                        </button>
+                                                    </form>
+                                                </td>
+                                            </tr>
+                                        </t>
+                                    </t>
+                                </tbody>
+                            </table>
+                        </t>
+                    </div>
+                </t>
+                <t t-if="not tasks">
+                    <div class="alert alert-warning" role="alert">
+                        <img src="/web/static/img/folder.svg"/>
+                        <span t-if="parent_id">There are no subtasks for this parent task.</span>
+                        <span t-if="not parent_id">There are no tasks.</span>
+                    </div>
+                </t>
+            </t>
+
+            <!-- MODAL COMPONENTS -->
+
+            <!-- Timesheet Modal (general) -->
+            <div class="modal fade" id="timesheetModal" tabindex="-1" aria-labelledby="timesheetModalLabel"
+                 aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="timesheetModalLabel">Timesheet Entry</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="timesheetForm">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <input type="hidden" id="timesheet_id" name="timesheet_id"/>
+                                <input type="hidden" id="current_task_id" value=""/>
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <label class="form-label">Jam</label>
+                                        <input type="number" min="0" max="24" id="timesheet_jam" class="form-control"
+                                               value="0"/>
+                                    </div>
+                                    <div class="col-6">
+                                        <label class="form-label">Menit</label>
+                                        <input type="number" min="0" max="59" id="timesheet_menit" class="form-control"
+                                               value="0"/>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Total Waktu</label>
+                                    <span id="timesheet_hours_display" style="font-weight:bold;">0 menit</span>
+                                    <input type="hidden" id="timesheet_hours" name="hours" value="0.00"/>
+                                </div>
+                                <!-- INPUT LAINNYA TETAP -->
+                                <div class="mb-3">
+                                    <label class="form-label">Start Date</label>
+                                    <input type="datetime-local" class="form-control" id="timesheet_start_date"
+                                           name="start_date" required="required"/>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">End Date</label>
+                                    <input type="datetime-local" class="form-control" id="timesheet_end_date"
+                                           name="end_date" required="required"/>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Employee</label>
+                                    <select class="form-select" id="timesheet_employee" name="employee_id"
+                                            required="required">
+                                        <option value="">Select Employee</option>
+                                        <t t-foreach="request.env['hr.employee'].sudo().search([])" t-as="emp">
+                                            <option t-att-value="emp.id">
+                                                <t t-esc="emp.name"/>
+                                            </option>
+                                        </t>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Description</label>
+                                    <textarea class="form-control" id="timesheet_description" name="description"
+                                              rows="3" placeholder="Enter task description..."></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="saveTimesheetBtn">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Subtask Modal -->
+            <div class="modal fade" id="subtaskModal" tabindex="-1" aria-labelledby="subtaskModalLabel"
+                 aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="subtaskModalLabel">Subtask Entry</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="subtaskForm">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <input type="hidden" id="subtask_id" name="subtask_id"/>
+                                <input type="hidden" id="current_task_id" value=""/>
+                                <div class="mb-3">
+                                    <label class="form-label">Name</label>
+                                    <input type="text" class="form-control" id="subtask_name" name="name"
+                                           required="required"/>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Master Task</label>
+                                    <select class="form-select" id="subtask_master_task" name="z_master_task_id">
+                                        <option value="">Select Master Task...</option>
+                                        <t t-foreach="master_tasks or []" t-as="master_task">
+                                            <option t-att-value="master_task.id">
+                                                <t t-esc="master_task.z_name"/>
+                                            </option>
+                                        </t>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Status</label>
+                                    <select class="form-select" id="subtask_status" name="z_project_task_state"
+                                            required="required">
+                                        <option value="new">New</option>
+                                        <option value="in_progress">In Progress</option>
+                                        <option value="approved1">The First Approved</option>
+                                        <option value="approved2">The Second Approved</option>
+                                        <option value="done">Done</option>
+                                        <option value="cancel">Cancelled</option>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Head Assignees</label>
+                                    <select class="form-select" id="subtask_head_assignes" name="z_head_assignes_ids"
+                                            multiple="multiple">
+                                        <t t-foreach="request.env['hr.employee'].sudo().search([])" t-as="emp">
+                                            <option t-att-value="emp.id">
+                                                <t t-esc="emp.name"/>
+                                            </option>
+                                        </t>
+                                    </select>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Member Assignees</label>
+                                    <select class="form-select" id="subtask_member_assignes"
+                                            name="z_member_assignes_ids" multiple="multiple">
+                                        <t t-foreach="request.env['hr.employee'].sudo().search([])" t-as="emp">
+                                            <option t-att-value="emp.id">
+                                                <t t-esc="emp.name"/>
+                                            </option>
+                                        </t>
+                                    </select>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="saveSubtaskBtn">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Invoice Plan Modal -->
+            <div class="modal fade" id="invoicePlanModal" tabindex="-1" aria-labelledby="invoicePlanModalLabel"
+                 aria-hidden="true">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="invoicePlanModalLabel">Invoice Plan Entry</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="invoicePlanForm">
+                                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                                <input type="hidden" id="invoice_plan_id" name="invoice_plan_id"/>
+                                <input type="hidden" id="current_task_id" value=""/>
+                                <div class="row">
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Invoice Number</label>
+                                            <input type="text" class="form-control" id="invoice_number"
+                                                   name="z_number_of_invoice" required="required"/>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Invoice Date</label>
+                                            <input type="date" class="form-control" id="invoice_date"
+                                                   name="z_invoice_date" required="required"/>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-3">
+                                            <label class="form-label">Amount Total</label>
+                                            <div class="input-group">
+                                                <span class="input-group-text">Rp</span>
+                                                <input type="number" step="0.01" min="0" class="form-control"
+                                                       id="invoice_amount" name="z_amount_total" required="required"/>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Status</label>
+                                            <select class="form-select" id="invoice_status" name="z_state"
+                                                    required="required">
+                                                <option value="draft">Draft</option>
+                                                <option value="sent">Sent</option>
+                                                <option value="paid">Paid</option>
+                                                <option value="cancelled">Cancelled</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Description</label>
+                                    <textarea class="form-control" id="invoice_description" name="z_name" rows="3"
+                                              required="required" placeholder="Enter invoice description..."></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="button" class="btn btn-primary" id="saveInvoicePlanBtn">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Timer Stop Modal (deskripsi saat stop) -->
+            <div class="modal fade" id="timerStopModal" tabindex="-1" aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title">
+                                <i class="fa fa-stop-circle me-2"></i>Stop Timer
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="alert alert-info">
+                                <h6 class="alert-heading">
+                                    <i class="fa fa-info-circle me-2"></i>Timer Summary
+                                </h6>
+                                <div class="row">
+                                    <div class="col-6">
+                                        <strong>Elapsed Time:</strong>
+                                        <br/>
+                                        <span id="timerElapsedTime" class="text-primary">00:00:00</span>
+                                    </div>
+                                    <div class="col-6">
+                                        <strong>Status:</strong>
+                                        <br/>
+                                        <span id="timerCurrentStatus" class="badge bg-success">Running</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label class="form-label">
+                                    Describe your activity
+                                    <span class="text-danger">*</span>
+                                </label>
+                                <textarea class="form-control" id="timerStopDescription" rows="4"
+                                          placeholder="What did you accomplish during this time?"
+                                          required="required"></textarea>
+                                <div id="descriptionError" class="invalid-feedback d-none">
+                                    Description is required when stopping the timer.
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Attachments (optional)</label>
+                                <input type="file" class="form-control" id="timerAttachments" multiple="multiple"
+                                       accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.txt"/>
+                                <div class="form-text">You can attach multiple files (PDF, DOC, Images, etc.)</div>
+                                <div id="filePreview"></div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                                <i class="fa fa-times me-1"></i>Cancel
+                            </button>
+                            <button type="button" class="btn btn-danger" id="confirmStopBtn"
+                                    t-att-data-task-id="task.id if task else 0">
+                                <i class="fa fa-stop me-1"></i>Stop &amp; Save
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Modal untuk List View -->
+            <div class="modal fade" id="settingModal" tabindex="-1" aria-labelledby="settingModalLabel"
+                 aria-hidden="true">
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="settingModalLabel">
+                                <i class="fa fa-cog me-2"></i>Task Settings
+                            </h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="list-group">
+                                <div class="list-group-item">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="mb-1">Auto-refresh</h6>
+                                            <small class="text-muted">Automatically refresh task list every 30 seconds
+                                            </small>
+                                        </div>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="autoRefreshSwitch"/>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="list-group-item">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="mb-1">Compact View</h6>
+                                            <small class="text-muted">Show more tasks in a smaller format</small>
+                                        </div>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="compactViewSwitch"/>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="list-group-item">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="mb-1">Sound Notifications</h6>
+                                            <small class="text-muted">Play sound when timer starts/stops</small>
+                                        </div>
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="soundNotifySwitch"/>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                            <button type="button" class="btn btn-primary" id="saveSettingsBtn">
+                                <i class="fa fa-save me-1"></i>Save Settings
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </t>
+    </template>
+</odoo>
